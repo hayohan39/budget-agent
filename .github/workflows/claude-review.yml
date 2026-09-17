@@ -1,0 +1,52 @@
+name: Claude PR Review
+
+# PR 이 열리면 자동으로 리뷰를 남긴다. 사용자가 PR 을 읽고 merge 를 결정하기 전에
+# 기계적으로 잡을 수 있는 것들을 먼저 걸러내는 단계.
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          track_progress: true
+          use_sticky_comment: true
+          claude_args: |
+            --model claude-sonnet-5
+            --max-turns 20
+            --allowed-tools "Read,Glob,Grep,Bash(git diff:*),Bash(git log:*)"
+          prompt: |
+            이 PR 의 diff 를 리뷰해라. 한국어로 쓴다.
+
+            우선순위대로 본다:
+            1. 정확성 버그 — 실제로 깨지는 입력/상태를 특정할 수 있는 것만.
+            2. 크로스 플랫폼 문제 — 하드코딩된 `/` 경로, `path.join` 미사용,
+               쉘 의존(`rm -rf`, `cp`, `FOO=bar cmd` 같은 POSIX 전용 문법),
+               CRLF/LF, 파일명 대소문자 가정.
+            3. 보안 — 커밋된 비밀값, 검증 없는 입력, 권한 누락.
+            4. 지나친 복잡도나 기존 코드와 중복되는 구현.
+
+            규칙:
+            - 스타일 취향이나 lint 가 이미 잡는 것은 언급하지 않는다.
+            - 지적할 때는 파일:라인 과 "이런 입력이면 이렇게 깨진다" 를 같이 쓴다.
+            - 문제가 없으면 짧게 "문제 없음" 이라고만 하고 억지로 만들어내지 않는다.
+            - 마지막 줄에 `승인 권장` / `수정 필요` 중 하나를 적는다.

@@ -1,0 +1,164 @@
+name: Deploy
+
+# main 에 merge 되면 DB 마이그레이션 -> Vercel 프로덕션 배포 순서로 진행하고,
+# 방금 merge 된 PR 에 결과를 코멘트로 남긴다.
+#
+# USE_NEON / USE_VERCEL 은 리포지토리 variable(secret 아님)이며 devflow 가
+# 프로젝트 생성 시 세팅한다. 켜져 있어도 연결에 필요한 값이 아직 없으면
+# 실패시키지 않고 무엇이 없는지 알린 뒤 건너뛴다. 아직 연결하지 않은 프로젝트에서
+# merge 했다는 이유만으로 main 이 빨간불이 되는 것은 잘못된 동작이다.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    name: Database migrate
+    if: vars.USE_NEON == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check database configuration
+        id: guard
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### ⏭️ 마이그레이션 건너뜀"
+              echo ""
+              echo "\`DATABASE_URL\` 시크릿이 없습니다."
+              echo ""
+              echo "설정: \`devflow provision --repo <owner>/<name> --neon\`"
+              echo "또는 Neon 콘솔의 연결 문자열을 \`gh secret set DATABASE_URL\` 로 넣으세요."
+              echo ""
+              echo "DB 를 쓰지 않을 거면 \`gh variable set USE_NEON --body false\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if ! ls migrations/*.sql >/dev/null 2>&1; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "마이그레이션 파일이 없습니다. 건너뜁니다."
+            exit 0
+          fi
+
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v5
+        if: steps.guard.outputs.ready == 'true'
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        if: steps.guard.outputs.ready == 'true'
+        run: npm ci
+
+      - name: Apply migrations
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: npm run migrate
+
+  deploy:
+    name: Vercel production deploy
+    needs: [migrate]
+    if: always() && vars.USE_VERCEL == 'true' && needs.migrate.result != 'failure' && needs.migrate.result != 'cancelled'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check Vercel configuration
+        id: guard
+        run: |
+          missing=()
+          [ -n "$VERCEL_TOKEN" ]      || missing+=(VERCEL_TOKEN)
+          [ -n "$VERCEL_ORG_ID" ]     || missing+=(VERCEL_ORG_ID)
+          [ -n "$VERCEL_PROJECT_ID" ] || missing+=(VERCEL_PROJECT_ID)
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### ⏭️ Vercel 배포 건너뜀"
+              echo ""
+              echo "다음 시크릿이 없습니다: \`${missing[*]}\`"
+              echo ""
+              echo "설정: \`devflow provision --repo <owner>/<name> --vercel\`"
+              echo ""
+              echo "Vercel 을 쓰지 않을 거면 \`gh variable set USE_VERCEL --body false\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v5
+        if: steps.guard.outputs.ready == 'true'
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install Vercel CLI
+        if: steps.guard.outputs.ready == 'true'
+        run: npm install --global vercel@latest
+
+      - name: Pull production env
+        if: steps.guard.outputs.ready == 'true'
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+
+      - name: Build
+        if: steps.guard.outputs.ready == 'true'
+        run: vercel build --prod --token="$VERCEL_TOKEN"
+
+      - name: Deploy
+        id: deploy
+        if: steps.guard.outputs.ready == 'true'
+        run: |
+          # --yes: 배포 이력이 없는 새 프로젝트의 첫 배포에서 CLI 가 프레임워크
+          # 자동 감지 확인을 물으려다 비대화형 CI 에서 실패하는 것을 막는다.
+          url=$(vercel deploy --prebuilt --prod --yes --token="$VERCEL_TOKEN")
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "배포됨: $url"
+          {
+            echo "### ✅ 프로덕션 배포 완료"
+            echo ""
+            echo "$url"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on the merged PR
+        if: steps.guard.outputs.ready == 'true' && steps.deploy.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          URL: ${{ steps.deploy.outputs.url }}
+          SHA: ${{ github.sha }}
+        run: |
+          pr=$(gh pr list --state merged --search "$SHA" --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$pr" ]; then
+            gh pr comment "$pr" --body "🚀 main 배포 완료: $URL"
+          else
+            echo "이 커밋에 연결된 merged PR 을 찾지 못했습니다. 코멘트를 건너뜁니다."
+          fi

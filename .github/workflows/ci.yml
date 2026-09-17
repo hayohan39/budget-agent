@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+# Windows runners also provide bash (via Git for Windows), so pinning bash
+# everywhere keeps one set of steps working on both matrix legs.
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint --if-present
+
+      - name: Typecheck
+        run: npm run typecheck --if-present
+
+      - name: Test
+        run: npm test --if-present
+
+      - name: Build
+        run: npm run build --if-present
+
+  # ---------------------------------------------------------------------------
+  # CI 실패 -> Claude 가 로그를 읽고 고쳐서 PR 브랜치에 push.
+  #
+  # 이 push 가 CI 를 다시 돌리려면 GITHUB_TOKEN 이 아닌 토큰으로 push 해야 한다.
+  # Claude GitHub App 이 설치되어 있으면 action 이 App 토큰을 쓰므로 재실행된다.
+  # App 을 쓰지 않는 경우 DEVFLOW_PAT 을 넣으면 그 토큰으로 push 한다.
+  # ---------------------------------------------------------------------------
+  autofix:
+    name: Claude auto-fix
+    needs: [test]
+    if: >-
+      failure()
+      && github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.draft == false
+      && !contains(github.event.pull_request.labels.*.name, 'no-autofix')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read       # Claude 가 실패한 job 로그를 읽는 데 필요
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.DEVFLOW_PAT || github.token }}
+
+      # 무한 auto-fix 루프 방지: 이 PR 에서 이미 N 번 고쳤으면 멈추고 사람을 부른다.
+      - name: Loop guard
+        id: guard
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+          MAX_ATTEMPTS: ${{ vars.AUTOFIX_MAX_ATTEMPTS || '3' }}
+        run: |
+          git fetch --no-tags origin "$BASE"
+          count=$(git log --oneline --grep='\[claude-autofix\]' "origin/$BASE..HEAD" | wc -l | tr -d '[:space:]')
+          echo "이 PR 의 auto-fix 시도 횟수: $count / $MAX_ATTEMPTS"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          if [ "$count" -ge "$MAX_ATTEMPTS" ]; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Claude fixes the failing CI
+        if: steps.guard.outputs.proceed == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.DEVFLOW_PAT || '' }}
+          additional_permissions: |
+            actions: read
+          use_sticky_comment: true
+          claude_args: |
+            --model claude-sonnet-5
+            --max-turns 30
+            --allowed-tools "Bash,Read,Edit,Write,Glob,Grep,mcp__github_ci__get_ci_status,mcp__github_ci__get_workflow_run_details,mcp__github_ci__download_job_log"
+          prompt: |
+            PR #${{ github.event.pull_request.number }} 의 CI 가 실패했다. 브랜치
+            `${{ github.event.pull_request.head.ref }}` 가 이미 체크아웃되어 있다.
+
+            할 일:
+            1. `mcp__github_ci__get_workflow_run_details` 와 `download_job_log` 로
+               run ${{ github.run_id }} 의 실패한 job 로그를 읽어 원인을 파악한다.
+               matrix 이므로 ubuntu / windows 중 어느 쪽이 깨졌는지 반드시 구분한다.
+            2. 최소 범위로 수정한다. 실패 원인만 고치고 리팩터링이나 무관한 정리는 하지 않는다.
+            3. 로컬에서 해당 명령(npm run lint / typecheck / test / build 중 실패한 것)을
+               직접 돌려 초록불이 되는 것을 확인한다.
+            4. 커밋 메시지 제목에 반드시 `[claude-autofix]` 를 포함해 커밋하고 push 한다.
+            5. PR 에 "무엇이 왜 깨졌고 어떻게 고쳤는지" 를 3~5줄로 한국어로 코멘트한다.
+
+            중요한 제약:
+            - 테스트를 삭제하거나 skip 처리해서 통과시키지 않는다. 원인을 고친다.
+            - lint 규칙을 끄거나 `// eslint-disable`, `@ts-ignore` 로 덮지 않는다.
+            - 한 쪽 OS 만 깨졌다면 경로 구분자, 줄바꿈(CRLF/LF), 대소문자 구분,
+              쉘 차이가 원인일 가능성이 높다. 그 관점부터 확인한다.
+            - 원인을 확신할 수 없거나 제품 동작을 바꿔야 고쳐지는 경우에는
+              **push 하지 말고** 무엇이 막혔는지 코멘트만 남긴다.
+
+      - name: Ask for a human
+        if: steps.guard.outputs.proceed != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          COUNT: ${{ steps.guard.outputs.count }}
+        run: |
+          gh pr comment "$PR" --body "🛑 auto-fix 를 ${COUNT}회 시도했지만 CI 가 계속 실패합니다. 자동 수정을 멈췄으니 확인이 필요합니다. 다시 시도하려면 \`[claude-autofix]\` 커밋을 정리하거나 \`AUTOFIX_MAX_ATTEMPTS\` 변수를 올려주세요."

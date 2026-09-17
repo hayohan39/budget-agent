@@ -1,0 +1,25 @@
+# 저장소 안에서는 항상 LF. 체크아웃할 때만 플랫폼에 맞춘다.
+* text=auto eol=lf
+
+# 실행되는 스크립트는 Windows 체크아웃에서도 LF 를 유지해야 한다.
+*.sh    text eol=lf
+*.bash  text eol=lf
+*.mjs   text eol=lf
+
+# Windows 전용 스크립트는 CRLF 여야 한다.
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# 바이너리
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+
+package-lock.json -diff linguist-generated=true
