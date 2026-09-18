@@ -1,0 +1,374 @@
+# 가계부 자동화 — 개발 계획서
+
+> ## 최우선 개발 가이드라인: 보안 체계 구축
+>
+> **이 프로젝트에서 가장 중요한 것은 기능이 아니라 보안이다.**
+>
+> 이 코드는 개인의 전체 금융 거래 내역을 다룬다. 유출되면 되돌릴 수 없다.
+> 기능 추가와 보안이 충돌하면 **언제나 보안을 택한다.**
+> 편의를 위해 보안을 낮추는 결정은 하지 않는다.
+> 모든 PR 은 아래 보안 체크리스트를 통과해야 한다.
+
+---
+
+## Context
+
+매월 수동으로 가계부를 정리하는 작업을 자동화한다. 토스뱅크 계좌 3개(메인 / 고정비 / 비상금)의 입출금 내역을 매월 수집하고, 규칙 기반으로 분류한 뒤, 정해진 템플릿으로 월간 정산 리포트를 만든다.
+
+`hayohan39/budget-agent` 는 Node.js 22 + Neon Postgres + GitHub Actions 스캐폴딩이 이미 갖춰져 있고 애플리케이션 코드만 없는 상태다. 기존 `scripts/migrate.mjs`(마이그레이션 러너)를 그대로 활용한다.
+
+### 확정된 설계 결정
+
+| 항목 | 결정 |
+|---|---|
+| 데이터 소스 | 토스뱅크 계좌 3개 |
+| 1차 수집 경로 | KFTC 오픈뱅킹 (조회 전용 스코프) |
+| 폴백 수집 경로 | 토스뱅크 거래내역 엑셀 파싱 |
+| 카드 지출 | **카드사별 월 사용액만 추적.** 세부 이용내역은 범위 밖 |
+| 카드사 연동 | 하지 않음 |
+| 분류 방식 | 규칙 기반, LLM 미사용 |
+| Codef | 제외 (자격증명 제3자 공유 리스크) |
+| 실행 위치 | **로컬 우선**, CI 는 선택 |
+
+---
+
+## 보안 체계 (구현 전 필독)
+
+### 1. 최소 권한 원칙
+
+- KFTC OAuth 는 **조회(inquiry) 스코프만** 요청한다. **이체(transfer) 스코프는 어떤 이유로도 요청하지 않는다.**
+- 토큰이 유출돼도 읽기만 가능한 상태를 유지한다.
+- DB 계정도 애플리케이션에 필요한 최소 권한만 부여한다.
+
+### 2. 데이터 최소화
+
+- **계좌번호 원문을 저장하지 않는다.** salt 를 적용한 해시만 저장한다.
+- API 원본 응답을 그대로 보관하는 `raw_data` 컬럼은 만들지 않는다. 저장하지 않은 데이터는 유출될 수 없다.
+- 필요 없는 컬럼은 만들지 않는다.
+
+### 3. 비밀값 관리
+
+- 토큰·키·`DATABASE_URL` 은 절대 커밋하지 않는다. `.env` 는 `.gitignore` 에 있어야 한다.
+- `refresh_token` 은 파일 권한 `0600` 으로 로컬에만 저장한다.
+- 커밋 전 비밀값 스캔을 습관화한다. 실수로 커밋했다면 **토큰을 즉시 폐기하고 재발급**한다 (히스토리에서 지우는 것만으로는 부족하다).
+
+### 4. 로그 위생
+
+- 거래 내역, 계좌번호, 토큰을 **어떤 로그에도 출력하지 않는다.** 디버그 로그 포함.
+- 에러 객체를 그대로 출력하지 않는다. API 에러 응답에 요청 본문이 포함될 수 있다.
+- 로그에 남기는 것은 건수·합계 등 집계값까지만.
+
+### 5. 실행 환경
+
+- **로컬 실행을 기본으로 한다.** 월 1회 실행이므로 CI 자동화의 이득이 작은 반면, CI 로 돌리면 `DATABASE_URL` 과 KFTC 토큰을 GitHub 에 올려야 하고 거래 데이터가 GitHub 인프라를 경유한다.
+- CI 를 쓴다면 금융 데이터가 아니라 **트리거만** CI 에 두고 실제 수집은 로컬에서 하는 구조를 검토한다.
+
+### 6. 레포지토리 보안
+
+- **레포를 private 으로 유지한다.**
+- `claude-mention.yml` 은 코멘트로 트리거되면서 레포 시크릿에 접근한다. 외부인이 `@claude` 코멘트로 시크릿을 유출시킬 수 있는 알려진 경로다. 이 프로젝트에 금융 시크릿을 추가하기 전에 **트리거 주체를 레포 소유자로 제한하거나 이 워크플로를 비활성화한다.**
+- 실제 거래 데이터가 담긴 엑셀 원본은 커밋하지 않는다. 테스트 fixture 는 개인정보를 제거한 샘플만 사용한다.
+
+### 7. 의존성 관리
+
+- 금융 데이터를 다루므로 npm 패키지 추가에 보수적으로 접근한다. 현재 의존성은 `pg` 하나뿐이며 이 상태를 최대한 유지한다.
+- 패키지를 추가할 때는 관리 상태와 의존성 트리 크기를 확인하고 PR 본문에 이유를 적는다.
+
+### PR 보안 체크리스트
+
+- [ ] 비밀값이 diff 에 포함되지 않았는가
+- [ ] 새로 추가한 로그에 거래 내역·계좌번호·토큰이 찍히지 않는가
+- [ ] 새 컬럼에 저장하는 데이터가 정말 필요한가
+- [ ] 새 의존성을 추가했다면 이유가 타당한가
+- [ ] 이체(transfer) 관련 API 를 호출하는 코드가 없는가
+
+---
+
+## 카드 지출 추적 범위
+
+**카드사별 월 사용액만 추적한다.** 카드 안에서 무엇을 샀는지(식비/쇼핑 등)는 범위 밖이다.
+
+계좌 거래내역에 남는 카드 대금 결제는 다음과 같다:
+
+```
+2026-09-15   신한카드          -1,234,567
+2026-09-15   KB국민카드          -456,700
+```
+
+분류기가 이런 거래를 `category = '카드대금'` 으로 분류하고 `counterparty` 에 카드사명을 정규화해 저장한다. 리포트에서 `counterparty` 로 GROUP BY 하면 카드사별 월 사용액이 나온다. **별도 컬럼이나 플래그가 필요 없다.**
+
+이 결정 덕분에 카드사 연동, 체크카드/신용카드 구분 로직, 가맹점 단위 분류가 모두 불필요해진다.
+
+---
+
+## 아키텍처
+
+```
+[Fetcher]  →  normalize  →  dedupe  →  classify  →  net transfers  →  report
+    ↑                                      ↑                            ↓
+ kftc.mjs   (1차)                   category_rules              템플릿 (추후)
+ excel.mjs  (폴백)                  merchant_map
+```
+
+수집기는 교체 가능한 인터페이스로 분리한다. KFTC 등록이 완료될 때까지 엑셀 파서로 동작시키고, 완료되면 어댑터만 바꾼다.
+
+---
+
+## 수집기 설계
+
+```js
+// src/fetchers/types.mjs — 공통 계약
+// fetch(yearMonth: string) → Promise<RawTransaction[]>
+```
+
+| 파일 | 역할 | 우선순위 |
+|---|---|---|
+| `src/fetchers/kftc.mjs` | KFTC 오픈뱅킹 OAuth + 거래내역 조회 | 1차 |
+| `src/fetchers/excel.mjs` | 토스뱅크 거래내역 엑셀/CSV 파싱 | 폴백 |
+
+### KFTC 구현 시 주의사항
+
+- **조회 스코프만 요청** (보안 체계 1항)
+- `refresh_token` 으로 갱신하되, 최초 사용자 동의 플로우는 1회 수동 실행이 필요하다
+- 거래내역 조회는 **1회 호출당 조회 가능 기간**과 **과거 보존 기간**에 제한이 있다 → 월 단위로 끊어 호출하고, 최초 1회는 과거분을 나눠서 백필한다. 정확한 제한값은 구현 전 API 문서에서 확인한다.
+- 3개 계좌 모두 토스뱅크이므로 계좌 등록·조회 로직은 단일 은행 기준으로 단순하게 간다
+
+### 엑셀 파서 주의사항
+
+- 토스뱅크 단일 은행이므로 **컬럼 프로파일이 1개만 필요**하다
+- 한국 은행이 주는 `.xls` 는 실제로는 HTML 테이블인 경우가 있다 → 확장자가 아니라 파일 앞부분을 sniffing 해서 분기
+- 인코딩 EUC-KR / UTF-8 자동 감지
+- 천단위 콤마, 음수 표기 정규화
+
+---
+
+## DB 스키마
+
+### `accounts`
+
+```sql
+CREATE TABLE accounts (
+  id           SMALLSERIAL PRIMARY KEY,
+  nickname     TEXT NOT NULL,          -- '메인' | '고정비' | '비상금'
+  bank_name    TEXT NOT NULL,          -- '토스뱅크'
+  account_hash TEXT NOT NULL UNIQUE,   -- salt 적용 해시. 원문 저장 금지
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+### `transactions`
+
+```sql
+CREATE TABLE transactions (
+  id           BIGSERIAL PRIMARY KEY,
+  account_id   SMALLINT NOT NULL REFERENCES accounts(id),
+  txn_at       TIMESTAMPTZ NOT NULL,
+  amount       BIGINT NOT NULL,        -- 입금 +, 출금 -
+  balance      BIGINT,                 -- 거래 후 잔액 (검산용)
+  description  TEXT NOT NULL,          -- 적요
+  counterparty TEXT,                   -- 상대방 (카드대금이면 카드사명)
+  category     TEXT,
+  is_internal  BOOLEAN NOT NULL DEFAULT FALSE,  -- 내 계좌 간 이체
+  source       TEXT NOT NULL,          -- 'kftc' | 'excel'
+  dedupe_key   TEXT NOT NULL UNIQUE,
+  year_month   TEXT NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX ON transactions (year_month);
+CREATE INDEX ON transactions (account_id, txn_at);
+```
+
+`dedupe_key` = `account_id + txn_at + amount + description` 해시. 같은 달을 두 번 수집해도 중복되지 않는다.
+
+`raw_data` 컬럼은 두지 않는다 (보안 체계 2항).
+
+### `category_rules` / `merchant_map`
+
+```sql
+CREATE TABLE category_rules (
+  id       SERIAL PRIMARY KEY,
+  pattern  TEXT NOT NULL,     -- 정규식
+  category TEXT NOT NULL,
+  priority INT  NOT NULL DEFAULT 100
+);
+
+CREATE TABLE merchant_map (
+  counterparty TEXT PRIMARY KEY,   -- 정규화된 상대방명
+  category     TEXT NOT NULL,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+---
+
+## 분류 엔진 (LLM 없음)
+
+우선순위대로 적용:
+
+1. **`merchant_map` 조회** — 과거에 사람이 직접 고친 매핑. 최우선.
+2. **`category_rules` 정규식 매칭** — `priority` 순.
+3. **미매칭** → `category = NULL`, 리포트의 "미분류" 섹션에 노출.
+
+**학습 루프**: 미분류 건을 한 번 고치면 `merchant_map` 에 저장되어 다음 달부터 자동 분류된다.
+
+초기 시드 규칙 (카드대금 + 고정비 자동이체 중심):
+
+```
+/신한카드|KB국민카드|현대카드|삼성카드|롯데카드|하나카드|우리카드|카드대금/  → 카드대금
+/월세|임대료|관리비/                → 주거
+/KT|SKT|LG ?U\+|알뜰폰/            → 통신
+/보험|생명|화재/                    → 보험
+/넷플릭스|NETFLIX|유튜브|스포티파이/  → 구독
+/급여|월급|상여/                    → 수입
+/이자|적금|예금|펀드/                → 저축·금융
+```
+
+카드대금 규칙은 `counterparty` 를 카드사명으로 정규화해 저장한다 (리포트에서 카드사별 집계에 사용).
+
+---
+
+## 내부 이체 상계 (반드시 처리)
+
+메인 → 고정비, 메인 → 비상금 이체는 **지출이 아니다.** 상계하지 않으면 지출이 실제의 두 배로 잡힌다.
+
+판정: 출금과 입금이 (1) 같은 날 ±1일, (2) 금액 절댓값 동일, (3) 양쪽 계좌 모두 `accounts` 에 등록됨 → 두 건 모두 `is_internal = true`, 수입/지출 집계에서 제외. 리포트에는 "계좌 간 이동"으로 별도 표시.
+
+3개 계좌가 모두 토스뱅크이므로 적요에 상대 계좌 정보가 일관되게 남을 가능성이 높아 판정이 단순하다.
+
+---
+
+## 리포트
+
+템플릿은 이번 커밋 이후 공유 예정 → `reporter.mjs` 는 인터페이스만 고정하고 JSON + 콘솔 표로 우선 구현한다.
+
+```js
+// renderReport(summary, format) → string
+// format: 'json' | 'console' | <추후 템플릿>
+```
+
+집계 내용:
+
+- 총 수입 / 총 지출 / 순증감
+- 카테고리별 소계
+- **카드사별 월 사용액** (`category='카드대금'` GROUP BY `counterparty`)
+- 계좌별 잔액 변화
+- 미분류 건 목록
+
+---
+
+## 파일 구조
+
+```
+src/
+  index.mjs                # 파이프라인 진입점
+  config.mjs
+  fetchers/
+    types.mjs
+    kftc.mjs               # 1차
+    excel.mjs              # 폴백
+  db/
+    client.mjs
+    queries.mjs
+  services/
+    classifier.mjs
+    reconciler.mjs         # 내부 이체 상계
+    reporter.mjs
+  utils/
+    date.mjs
+    normalize.mjs
+    hash.mjs               # 계좌번호 해시
+
+migrations/                # npm run migrate:new 로 생성
+test/
+  classifier.test.mjs
+  reconciler.test.mjs
+  excel.test.mjs
+  fixtures/                # 개인정보 제거 샘플만
+```
+
+---
+
+## 구현 단계
+
+**Phase 0 — 보안 기반 (최우선)**
+1. `CLAUDE.md` 에 보안 가이드라인 섹션 추가 (아래 참고)
+2. `.gitignore` 에 `.env`, `*.xls*`, `*.csv`, `data/` 추가
+3. `claude-mention.yml` 트리거 제한 또는 비활성화
+4. `utils/hash.mjs` — 계좌번호 해시 (salt 는 환경변수)
+
+**Phase 1 — 기반**
+5. 마이그레이션 4개 (`accounts`, `transactions`, `category_rules`, `merchant_map`) — 반드시 `npm run migrate:new -- <이름>` 사용
+6. `config.mjs`, `db/client.mjs`, `db/queries.mjs`
+7. 계좌 등록 CLI (`npm run account:add`) — 계좌번호는 입력 즉시 해시
+
+**Phase 2 — 수집**
+8. `fetchers/types.mjs` 계약 정의
+9. `fetchers/excel.mjs` — 토스뱅크 프로파일
+10. `utils/normalize.mjs` — 정규화 + `dedupe_key`
+11. `fetchers/kftc.mjs` — OAuth(조회 전용) + 거래내역 조회 + 월 단위 백필
+
+**Phase 3 — 분류·정산**
+12. `services/classifier.mjs` + 시드 규칙
+13. `services/reconciler.mjs` — 내부 이체 상계
+14. 미분류 수정 CLI (`npm run fix`) → `merchant_map` 갱신
+
+**Phase 4 — 리포트**
+15. `services/reporter.mjs` — JSON/콘솔 (템플릿 수신 시 교체)
+16. `src/index.mjs` 연결, `--dry-run` 지원
+17. 테스트 작성 (기존 `test/smoke.test.mjs` 교체)
+
+---
+
+## CLAUDE.md 보안 규칙 (반영 완료)
+
+아래 내용을 `CLAUDE.md` 최상단에 반영했다. 개발 시 이 규칙을 따른다:
+
+```markdown
+## 보안 규칙 (최우선)
+
+이 프로젝트는 개인 금융 거래 내역을 다룬다. **기능보다 보안이 우선한다.**
+기능과 보안이 충돌하면 언제나 보안을 택한다.
+
+- KFTC OAuth 는 **조회(inquiry) 스코프만** 요청한다. 이체(transfer) 스코프는
+  어떤 이유로도 요청하지 않는다.
+- **계좌번호 원문을 저장하지 않는다.** salt 적용 해시만 저장한다.
+- API 원본 응답을 그대로 보관하는 컬럼을 만들지 않는다. 저장하지 않은 데이터는
+  유출될 수 없다.
+- 거래 내역·계좌번호·토큰을 **어떤 로그에도 출력하지 않는다.** 디버그 로그 포함.
+  에러 객체를 그대로 출력하지 않는다(요청 본문이 섞여 나올 수 있다).
+- 비밀값은 커밋하지 않는다. 실수로 커밋했다면 히스토리 정리로 끝내지 말고
+  **토큰을 즉시 폐기하고 재발급**한다.
+- 실제 거래 데이터(엑셀/CSV)는 커밋하지 않는다. 테스트 fixture 는 개인정보를
+  제거한 샘플만 쓴다.
+- 파이프라인은 **로컬 실행이 기본**이다. CI 에 금융 시크릿을 올리지 않는다.
+- npm 패키지 추가에 보수적으로 접근한다. 추가 시 PR 본문에 이유를 적는다.
+
+### PR 보안 체크리스트
+
+- [ ] 비밀값이 diff 에 포함되지 않았는가
+- [ ] 새 로그에 거래 내역·계좌번호·토큰이 찍히지 않는가
+- [ ] 새 컬럼에 저장하는 데이터가 정말 필요한가
+- [ ] 새 의존성의 추가 이유가 타당한가
+- [ ] 이체(transfer) 관련 API 호출 코드가 없는가
+```
+
+---
+
+## 검증 방법
+
+1. `npm run migrate:status` — 마이그레이션 적용 확인
+2. `npm test` — 분류기·정산기·파서 단위 테스트
+3. `node src/index.mjs --dry-run` — DB 쓰기 없이 파싱·분류 결과 확인
+4. **잔액 검산** — 마지막 거래의 `balance` 가 실제 계좌 잔액과 일치하는지
+5. **상계 검증** — 상계 전/후 총지출 차이가 내부 이체 금액과 정확히 일치하는지
+6. **중복 검증** — 같은 달을 두 번 수집 → 신규 저장 0건
+7. **카드사별 집계 검증** — 카드사별 합계가 계좌 내역의 카드대금 출금 합계와 일치하는지
+8. **보안 검증** — 전체 실행 로그를 grep 해서 계좌번호·토큰이 찍히지 않았는지 확인
+
+---
+
+## 미결 사항
+
+- **정산 템플릿** — 이번 커밋 이후 공유 예정. `reporter.mjs` 인터페이스는 고정해 두었으므로 템플릿만 추가하면 된다.
+- **KFTC 조회 기간 제한** — 1회 호출 조회 범위와 과거 보존 기간을 API 문서에서 확인 후 백필 전략 확정.
