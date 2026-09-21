@@ -18,3 +18,10 @@ coverage/
 Thumbs.db
 *.log
 npm-debug.log*
+
+# 실제 거래 데이터는 커밋하지 않는다.
+*.xlsx
+*.xls
+*.csv
+*.pdf
+/data/

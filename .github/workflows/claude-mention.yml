@@ -18,11 +18,18 @@ concurrency:
 
 jobs:
   claude:
+    # 이 워크플로는 코멘트로 트리거되면서 레포 시크릿에 접근한다. 트리거 주체를
+    # 레포 소유자로 제한하지 않으면 코멘트를 쓸 수 있는 누구나 시크릿에 닿는
+    # 유출 경로가 된다. github.event.sender 는 모든 이벤트에서 실제로 코멘트/
+    # 리뷰/라벨을 만든 사용자다.
     if: >-
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || github.event.label.name == 'claude'))
+      github.event.sender.login == github.repository_owner &&
+      (
+        (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+        (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || github.event.label.name == 'claude'))
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: write
