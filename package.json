@@ -15,7 +15,8 @@
     "test": "node --test",
     "migrate": "node scripts/migrate.mjs",
     "migrate:new": "node scripts/migrate.mjs new",
-    "migrate:status": "node scripts/migrate.mjs status"
+    "migrate:status": "node scripts/migrate.mjs status",
+    "accounts:seed": "node scripts/seed-accounts.mjs"
   },
   "dependencies": {
     "next": "16.3.5",
