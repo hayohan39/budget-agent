@@ -65,10 +65,18 @@ export function parseEnv(env) {
   const seen = new Map();
   for (const [role, name] of ENV_NAMES) {
     const value = env[name];
-    if (typeof value !== 'string' || value === '') {
+    if (typeof value !== 'string') {
       return null;
     }
-    seen.set(role, value);
+    // GitHub 시크릿 UI 에 값을 붙여넣으면 끝에 개행이나 공백이 딸려 오는 일이
+    // 흔하다. 그대로 검증하면 "4자리를 넣었는데 4자리가 아니라고 한다"는
+    // 혼란스러운 실패가 된다. 여기서 한 번 다듬는다(CLI 경로는 그대로 둔다).
+    const trimmed = value.trim();
+    // 다듬고 나서 비었으면 아예 없는 것과 똑같이 취급해 CLI 폴백에 맡긴다.
+    if (trimmed === '') {
+      return null;
+    }
+    seen.set(role, trimmed);
   }
   return toAccounts(seen);
 }
