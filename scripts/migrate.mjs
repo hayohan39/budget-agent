@@ -62,6 +62,11 @@ async function connect() {
     throw new Error('DATABASE_URL 이 설정되지 않았습니다.');
   }
   const client = new pg.Client({ connectionString });
+  // 세션 도중 소켓이 끊기면 pg 는 대기 중인 쿼리를 reject 하면서 'error' 도 emit 한다.
+  // 리스너가 없으면 EventEmitter 가 그대로 throw 해서 try/catch 밖으로 빠져나가고,
+  // Node 가 에러 객체 전체를 스택과 함께 로그에 찍는다.
+  // 쿼리 쪽에서 이미 같은 에러를 처리하므로 여기서는 삼켜도 정보가 사라지지 않는다.
+  client.on('error', () => {});
   await client.connect();
   return client;
 }
