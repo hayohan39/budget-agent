@@ -167,22 +167,47 @@ test('오류 메시지에 값이 포함되지 않는다', () => {
       `env ${label}`,
     );
 
-    // CLI 경로. 개행이 든 값은 `역할=값` 토큰 하나로 표현할 수 없어(형식 검사가
-    // 먼저 걸린다) 환경변수 경로에서만 확인한다.
-    if (!value.includes('\n')) {
-      assert.throws(
-        () => parseArgs(argv({ main: value })),
-        (error) => {
-          assert.ok(
-            !error.message.includes(value),
-            `argv 오류 메시지에 값이 새어 나왔다: ${label}`,
-          );
-          return true;
-        },
-        `argv ${label}`,
-      );
-    }
+    // CLI 경로. 개행이 든 값은 형식 검사(`역할=값` 정규식)에서 먼저 걸리는데,
+    // 그 경로도 값을 되비추면 안 된다. 예외 없이 전부 확인한다.
+    assert.throws(
+      () => parseArgs(argv({ main: value })),
+      (error) => {
+        assert.ok(
+          !error.message.includes(value),
+          `argv 오류 메시지에 값이 새어 나왔다: ${label}`,
+        );
+        return true;
+      },
+      `argv ${label}`,
+    );
   }
+});
+
+test('형식이 틀린 인자는 값도 토큰도 아닌 위치만 알린다', () => {
+  const value = '11\n11';
+  const token = `main=${value}`;
+
+  assert.throws(
+    () => parseArgs([token, `fixed=${FIXED}`, `emergency=${EMERGENCY}`]),
+    (error) => {
+      // 토큰 전체가 `역할=값` 이므로 토큰을 되비추면 값이 함께 샌다.
+      assert.ok(!error.message.includes(value), '형식 오류 메시지에 값이 새어 나왔다');
+      assert.ok(!error.message.includes(token), '형식 오류 메시지에 토큰이 새어 나왔다');
+      // 대신 몇 번째 인자가 틀렸는지는 알려 줘야 고칠 수 있다.
+      assert.match(error.message, /1번째 인자/);
+      return true;
+    },
+  );
+
+  // 위치는 실제로 틀린 인자를 가리킨다 — 항상 1번이라고 말하는 것이 아니다.
+  assert.throws(
+    () => parseArgs([`main=${MAIN}`, `fixed=${FIXED}`, token.replace('main', 'emergency')]),
+    (error) => {
+      assert.ok(!error.message.includes(value), '형식 오류 메시지에 값이 새어 나왔다');
+      assert.match(error.message, /3번째 인자/);
+      return true;
+    },
+  );
 });
 
 test('겹치는 값을 거부할 때도 오류 메시지에 값이 들어가지 않는다', () => {

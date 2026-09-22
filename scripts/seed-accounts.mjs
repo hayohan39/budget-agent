@@ -83,11 +83,18 @@ export function parseEnv(env) {
 
 export function parseArgs(argv) {
   const seen = new Map();
-  for (const arg of argv) {
+  for (const [index, arg] of argv.entries()) {
     const match = /^([a-z]+)=(.*)$/.exec(arg);
     if (!match) {
-      throw new Error(`인자 형식이 올바르지 않습니다: "${arg}"\n${USAGE}`);
+      // 토큰 전체(`역할=값`)를 되비추면 계좌 뒤 4자리가 그대로 stderr 에 찍힌다.
+      // 정규식이 개행에 매치되지 않으므로 값에 개행이 섞이면 4자리 검사 대신
+      // 이 경로로 빠진다 — 값은 넣지 말고 몇 번째 인자인지만 알린다.
+      throw new Error(
+        `${index + 1}번째 인자의 형식이 올바르지 않습니다. 역할=<4자리> 형태여야 합니다.\n${USAGE}`,
+      );
     }
+    // role 은 `[a-z]+` 캡처라 숫자도 개행도 들어갈 수 없다. 값이 섞여 나올 수
+    // 없으므로 아래 두 에러에서는 역할 이름을 그대로 써도 안전하다.
     const [, role, value] = match;
     if (!NICKNAMES.has(role)) {
       throw new Error(
