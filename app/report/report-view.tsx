@@ -364,7 +364,9 @@ export function ReportView({
           <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">계좌블록</h2>
           <p className="text-xs text-zinc-500">
             메인이 아닌 계좌. 이 계좌들의 입금은 메인에서 간 돈이라 위 종합정산에서는
-            세지 않습니다.
+            세지 않습니다. <strong>순증감</strong> 은 그 계좌 안에서만 닫히는 값으로,
+            이자가 그 계좌의 집행을 상계한 뒤의 금액입니다(입금 + 이자 − 집행).
+            이자는 위 수입에 올라가지 않습니다.
           </p>
           <table className="w-full border-collapse text-sm">
             <thead>
@@ -381,6 +383,9 @@ export function ReportView({
                 <th scope="col" className={`${CELL} text-right font-normal`}>
                   이자
                 </th>
+                <th scope="col" className={`${CELL} text-right font-normal`}>
+                  순증감 (이자 상계)
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -392,6 +397,7 @@ export function ReportView({
                   <td className={NUM}>{flow(block.입금.total)}</td>
                   <td className={NUM}>{flow(block.집행.total)}</td>
                   <td className={NUM}>{flow(block.이자.total)}</td>
+                  <td className={`${NUM} font-medium`}>{flow(block.순증감)}</td>
                 </tr>
               ))}
             </tbody>

@@ -145,6 +145,44 @@ test('거래가 없는 달은 noRows 로 남는다', () => {
   assert.equal(result.reason, VERIFY_REASONS.noRows);
 });
 
+test('비메인 계좌의 이자를 더해도 검산 결과가 그대로다', () => {
+  // fixture 는 **메인 계좌 명세서**다. 비메인 계좌의 이자 행이 한 건도 없어
+  // 이 경우는 합성한다 — 아래 두 행은 실제 거래가 아니다.
+  const base = fixtureRows();
+  const interest = [
+    row({
+      id: '101',
+      account_id: 2,
+      txn_at: '2026-08-31T00:00:00+09:00',
+      amount: '64',
+      txn_type: '이자입금',
+      category: '이자',
+    }),
+    row({
+      id: '102',
+      account_id: 3,
+      txn_at: '2026-08-31T00:00:00+09:00',
+      amount: '2431',
+      txn_type: '이자입금',
+      category: '이자',
+    }),
+  ];
+
+  const before = verifyMonthlyReport(report(base));
+  const withInterest = report([...base, ...interest]);
+  const after = verifyMonthlyReport(withInterest);
+
+  assert.equal(before.checked, true);
+  assert.equal(before.ok, true);
+  // 검산은 메인 계좌의 거래 금액 합과 잔액 변화를 본다. 비메인 계좌의 이자는
+  // 둘 중 어느 쪽에도 들어가지 않으므로 결과가 **한 칸도** 달라지지 않는다.
+  assert.deepEqual(after, before);
+
+  // 상계는 그 계좌 블록 안에서만 일어난다.
+  assert.equal(withInterest.계좌블록.find((block) => block.role === 'fixed').순증감, 64);
+  assert.equal(withInterest.계좌블록.find((block) => block.role === 'emergency').순증감, 2431);
+});
+
 test('메인 계좌가 없으면 noMainAccount 로 남는다', () => {
   const result = verifyMonthlyReport(
     aggregateMonthly({

@@ -151,6 +151,140 @@ test('분류만 서 있고 is_transfer 가 비어도 이동으로 본다', () =>
   assert.equal(report([classified]).계좌간이동.total, -500000);
 });
 
+// ── 비메인 계좌 이자 상계 ──────────────────────────────────────────────────
+
+/**
+ * 메인 · 고정비 · 비상금 세 계좌가 모두 도는 한 달치.
+ *
+ * fixture 는 **메인 계좌 명세서**라 비메인 계좌의 이자 행이 한 건도 없다.
+ * 그래서 이 모양은 합성한다 — 금액은 임의의 값이고 실제 거래가 아니다.
+ *
+ * 메인 행에는 `balance` 를 넣어 잔액 변화가 실제로 계산되게 한다.
+ * `withInterest` 가 켜지면 고정비 · 비상금 계좌에 이자 행이 한 건씩 붙는다.
+ */
+function threeAccountRows({ withInterest }) {
+  const base = [
+    // 메인 → 고정비 1,000,000 / 메인 → 비상금 500,000. 잔액 변화는 −1,500,000.
+    row({
+      id: '1',
+      account_id: 1,
+      txn_at: '2026-08-05T00:00:00+09:00',
+      amount: '-1000000',
+      description: '고정비 계좌',
+      category: '고정비이체',
+      is_transfer: true,
+      balance: '9000000',
+    }),
+    row({
+      id: '2',
+      account_id: 1,
+      txn_at: '2026-08-06T00:00:00+09:00',
+      amount: '-500000',
+      description: '비상금 계좌',
+      category: '비상금이체',
+      is_transfer: true,
+      balance: '8500000',
+    }),
+    // 고정비 계좌 — 메인에서 온 입금과 그 계좌의 집행.
+    row({ id: '3', account_id: 2, txn_at: '2026-08-05T00:00:00+09:00', amount: '1000000' }),
+    row({
+      id: '4',
+      account_id: 2,
+      txn_at: '2026-08-10T00:00:00+09:00',
+      amount: '-886815',
+      txn_type: '자동이체',
+      category: '고정비',
+    }),
+    // 비상금 계좌 — 입금만 있고 집행이 없는 달.
+    row({ id: '5', account_id: 3, txn_at: '2026-08-06T00:00:00+09:00', amount: '500000' }),
+  ];
+  if (!withInterest) return base;
+
+  return [
+    ...base,
+    row({
+      id: '6',
+      account_id: 2,
+      txn_at: '2026-08-31T00:00:00+09:00',
+      amount: '64',
+      txn_type: '이자입금',
+      category: '이자',
+    }),
+    row({
+      id: '7',
+      account_id: 3,
+      txn_at: '2026-08-31T00:00:00+09:00',
+      amount: '2431',
+      txn_type: '이자입금',
+      category: '이자',
+    }),
+  ];
+}
+
+test('비메인 계좌의 이자는 그 계좌 블록 안에서 집행을 상계한다', () => {
+  const result = report(threeAccountRows({ withInterest: true }));
+  const fixed = result.계좌블록.find((block) => block.role === 'fixed');
+  const emergency = result.계좌블록.find((block) => block.role === 'emergency');
+
+  assert.deepEqual(fixed.입금, { total: 1000000, count: 1 });
+  assert.deepEqual(fixed.집행, { total: -886815, count: 1 });
+  assert.deepEqual(fixed.이자, { total: 64, count: 1 });
+  // 순증감 = 입금 + 이자 − 집행 (집행은 이미 음수라 코드에서는 덧셈이다).
+  assert.equal(fixed.순증감, 113249);
+  assert.equal(fixed.순증감, fixed.입금.total + fixed.이자.total + fixed.집행.total);
+
+  // 같은 규칙을 비상금에도 그대로 쓴다. 한쪽만 특별 취급하지 않는다.
+  assert.deepEqual(emergency.이자, { total: 2431, count: 1 });
+  assert.equal(emergency.집행.total, 0);
+  assert.equal(emergency.순증감, 502431);
+  assert.equal(
+    emergency.순증감,
+    emergency.입금.total + emergency.이자.total + emergency.집행.total,
+  );
+});
+
+test('이자가 붙으면 그 계좌의 순증감만 이자만큼 움직인다', () => {
+  const withoutInterest = report(threeAccountRows({ withInterest: false }));
+  const withInterest = report(threeAccountRows({ withInterest: true }));
+
+  const before = (result, role) => result.계좌블록.find((block) => block.role === role);
+
+  assert.equal(before(withoutInterest, 'fixed').이자.total, 0);
+  assert.equal(before(withoutInterest, 'fixed').순증감, 113185);
+  assert.equal(before(withInterest, 'fixed').순증감 - before(withoutInterest, 'fixed').순증감, 64);
+  assert.equal(
+    before(withInterest, 'emergency').순증감 - before(withoutInterest, 'emergency').순증감,
+    2431,
+  );
+});
+
+test('비메인 계좌의 이자는 종합정산의 수입에 들어가지 않는다', () => {
+  const withoutInterest = report(threeAccountRows({ withInterest: false }));
+  const withInterest = report(threeAccountRows({ withInterest: true }));
+
+  assert.equal(withInterest.수입.total, 0, '비메인 계좌 이자가 수입으로 샜다');
+  assert.deepEqual(withInterest.수입.items, []);
+
+  // 메인 기준 현금흐름은 이자가 붙어도 **한 칸도** 달라지지 않는다.
+  assert.deepEqual(withInterest.종합정산, withoutInterest.종합정산);
+  assert.equal(withInterest.종합정산.실현순증감, -1500000);
+
+  // 메인 잔액 변화도 그대로다(검산의 반대쪽 값).
+  const mainOf = (result) => result.계좌별잔액변화.find((entry) => entry.role === 'main');
+  assert.deepEqual(mainOf(withInterest), mainOf(withoutInterest));
+  assert.equal(mainOf(withInterest).change, -1500000);
+});
+
+test('메인 계좌의 이자는 종전대로 수입이다', () => {
+  // 상계는 비메인 계좌에만 적용한다. 메인 계좌의 이자는 메인으로 들어온 돈이다.
+  const result = report([
+    row({ id: '1', account_id: 1, amount: '263', txn_type: '이자입금', category: '이자' }),
+  ]);
+
+  assert.deepEqual(result.수입.items, [{ key: '이자', total: 263, count: 1 }]);
+  assert.equal(result.종합정산.실현순증감, 263);
+});
+
 // ── 섹션 ──────────────────────────────────────────────────────────────────
 
 test('고정지출1 은 저축·용돈·주거비를 고정된 순서로 담는다', () => {
