@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
 
-import { crc32, openZip, openZipFile } from '../lib/xlsx/zip.mjs';
+import { MAX_ENTRY_BYTES, crc32, openZip, openZipFile } from '../lib/xlsx/zip.mjs';
 
 const FIXTURE = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -30,10 +30,15 @@ function buildZip(entries, options = {}) {
 
   for (const entry of entries) {
     const name = Buffer.from(entry.name, 'utf8');
-    const content = Buffer.from(entry.content, 'utf8');
+    const content = Buffer.isBuffer(entry.content)
+      ? entry.content
+      : Buffer.from(entry.content, 'utf8');
     const method = entry.method ?? 0;
     const stored = method === 8 ? deflateRawSync(content) : content;
     const crc = entry.crc ?? crc32(content);
+    // 중앙 디렉터리에 적을 "압축 해제 후 크기". 일부러 틀리게 쓸 수 있어야
+    // 압축 폭탄(크게 부풀린 값 · 작게 거짓말한 값)을 재현할 수 있다.
+    const declared = entry.uncompressedSize ?? content.length;
 
     const local = Buffer.alloc(30 + name.length);
     local.writeUInt32LE(0x04034b50, 0);
@@ -42,7 +47,7 @@ function buildZip(entries, options = {}) {
     local.writeUInt16LE(method, 8);
     local.writeUInt32LE(crc, 14);
     local.writeUInt32LE(stored.length, 18);
-    local.writeUInt32LE(content.length, 22);
+    local.writeUInt32LE(declared, 22);
     local.writeUInt16LE(name.length, 26);
     name.copy(local, 30);
 
@@ -54,7 +59,7 @@ function buildZip(entries, options = {}) {
     central.writeUInt16LE(method, 10);
     central.writeUInt32LE(crc, 16);
     central.writeUInt32LE(stored.length, 20);
-    central.writeUInt32LE(content.length, 24);
+    central.writeUInt32LE(declared, 24);
     central.writeUInt16LE(name.length, 28);
     central.writeUInt32LE(offset, 42);
     name.copy(central, 46);
@@ -174,4 +179,50 @@ test('ZIP 이 아니거나 잘린 파일은 EOCD 단계에서 거부한다', () 
 
 test('Buffer 가 아닌 입력은 받지 않는다', () => {
   assert.throws(() => openZip('xlsx 내용'), TypeError);
+});
+
+// ── 압축 폭탄 ──────────────────────────────────────────────────────────────
+
+test('압축 해제 후 크기가 상한을 넘는 엔트리는 풀기 전에 거부한다', () => {
+  // 업로드 상한(4MB)은 **압축된** 크기만 묶는다. deflate 는 반복 데이터를
+  // 1000:1 로 줄이므로 그 안에서도 수백 MB 로 부푸는 엔트리를 만들 수 있다.
+  // 실제로 398KB 짜리 zip 하나가 400MB 를 풀어 RSS 를 858MB 끌어올렸다.
+  const zip = openZip(
+    buildZip([
+      {
+        name: 'xl/worksheets/sheet1.xml',
+        content: 'A'.repeat(1024),
+        method: 8,
+        uncompressedSize: MAX_ENTRY_BYTES + 1,
+      },
+    ]),
+  );
+
+  const before = process.memoryUsage().heapUsed;
+  assert.throws(() => zip.read('xl/worksheets/sheet1.xml'), /너무 커지는 엔트리/);
+  const grewMb = (process.memoryUsage().heapUsed - before) / (1024 * 1024);
+  // 풀기 전에 걸러야 방어다. 풀고 나서 재면 이미 메모리를 다 쓴 뒤다.
+  assert.ok(grewMb < 16, `힙이 ${grewMb.toFixed(1)}MB 늘었다 — 압축을 풀고 있다`);
+
+  // 거부 메시지에는 파트 이름만 들어간다(내용은 들어가지 않는다).
+  assert.throws(() => zip.read('xl/worksheets/sheet1.xml'), /sheet1\.xml/);
+});
+
+test('상한 바로 아래를 선언한 엔트리는 그대로 읽는다', () => {
+  const zip = openZip(
+    buildZip([{ name: 'ok.xml', content: '<a/>', method: 8 }]),
+  );
+  assert.equal(zip.readText('ok.xml'), '<a/>');
+});
+
+test('선언 크기를 작게 거짓말해도 zlib 상한에서 멈춘다', () => {
+  // 중앙 디렉터리의 값은 아카이브를 만든 쪽이 적은 값이다. 그것만 믿으면
+  // "1KB 라고 적고 실제로는 수십 MB" 인 엔트리에 그대로 당한다.
+  const real = Buffer.alloc(MAX_ENTRY_BYTES + 1024, 0x41);
+  const zip = openZip(
+    buildZip([{ name: 'liar.xml', content: real, method: 8, uncompressedSize: 1024 }]),
+  );
+
+  // 풀다가 상한에서 멈추고, 에러 객체를 그대로 올리지 않는다(파트 이름만).
+  assert.throws(() => zip.read('liar.xml'), /압축을 풀지 못했습니다: liar\.xml/);
 });
