@@ -30,7 +30,10 @@ const BLOCK_KEY = {
   verifierHashValue: Buffer.from('d7aa0f6d3061344e', 'hex'),
   keyValue: Buffer.from('146e0be7abacd0d6', 'hex'),
   hmacKey: Buffer.from('5fb2ad010cb9e1f6', 'hex'),
-  hmacValue: Buffer.from('a0677f02b22c84a0', 'hex'),
+  // ⚠️ 마지막 바이트는 0x33 이다(lib/xlsx/crypto.mjs 의 같은 상수 주석 참고).
+  //    실제 Microsoft Office 가 만든 agile 파일로 확인한 값이다. 여기와 lib 이
+  //    **같이** 틀리면 왕복 시험은 조용히 통과한다 — 그래서 되돌리지 말 것.
+  hmacValue: Buffer.from('a0677f02b22c8433', 'hex'),
 };
 
 function hash(algorithm, ...parts) {
