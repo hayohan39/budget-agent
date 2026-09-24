@@ -32,6 +32,40 @@ function patchFatEntry(container, sectorId, value) {
   return copy;
 }
 
+/**
+ * 루트 엔트리(디렉터리 0번)의 선언 크기를 바꿔치기한다.
+ * 루트 엔트리의 크기가 곧 **미니 스트림 본체의 크기**다.
+ * (v3 · 512바이트 섹터 기준. 크기 필드는 엔트리 시작에서 120바이트 뒤다.)
+ */
+function patchRootSize(container, size) {
+  const copy = Buffer.from(container);
+  const directoryStart = copy.readUInt32LE(48);
+  copy.writeUInt32LE(size >>> 0, 512 + directoryStart * 512 + 120);
+  return copy;
+}
+
+/**
+ * `run` 이 도는 동안 `Buffer.alloc` 이 한 번에 요청한 최대 바이트 수.
+ *
+ * "거절한다" 만 보면 **거절하기 전에 이미 64MB 를 잡았는지** 를 놓친다. 이
+ * 모듈의 약속은 "할당하기 전에 선언된 크기를 본다" 이므로 할당 자체를 센다.
+ * 원래 함수는 finally 로 반드시 되돌린다.
+ */
+function largestAllocation(run) {
+  const original = Buffer.alloc;
+  let largest = 0;
+  Buffer.alloc = (size, ...rest) => {
+    if (typeof size === 'number' && size > largest) largest = size;
+    return original.call(Buffer, size, ...rest);
+  };
+  try {
+    run();
+  } finally {
+    Buffer.alloc = original;
+  }
+  return largest;
+}
+
 test('스트림 목록을 읽고 이름으로 찾는다', () => {
   const cfb = openCfb(sampleContainer());
   assert.deepEqual(cfb.names().sort(), ['Large', 'Small']);
@@ -97,6 +131,29 @@ test('없는 스트림을 읽으려 하면 이름만 알리고 던진다', () =>
 test('maxBytes 를 넘는 스트림은 읽지 않는다', () => {
   const cfb = openCfb(sampleContainer());
   assert.throws(() => cfb.read('Large', { maxBytes: 1024 }), /너무 큽니다/);
+});
+
+test('미니 스트림이 파일보다 크다고 적힌 컨테이너는 할당하기 전에 거절한다', () => {
+  // 루트 엔트리의 크기만 크게 적은 컨테이너다. 상한(MAX_STREAM_BYTES)은
+  // 넘지 않으므로 그 검사만으로는 통과하고, 체인을 펼치는 readChain 이
+  // "체인이 짧다" 를 알아차리기 **전에** 그 크기로 Buffer 를 잡는다.
+  // 2KB 남짓한 파일로 63MB 를 잡게 만들 수 있었다(약 25,000배 증폭).
+  const container = patchRootSize(sampleContainer(), MAX_STREAM_BYTES - 1);
+  assert.ok(container.length < 64 * 1024, '증폭을 보려면 원본이 작아야 한다');
+
+  const largest = largestAllocation(() => {
+    // 'Small' 은 4096 미만이라 미니 스트림 경로로 간다.
+    assert.throws(() => openCfb(container).read('Small'), /미니 스트림 크기가 파일보다/);
+  });
+
+  // 거절하기까지 파일 크기보다 큰 버퍼를 단 한 번도 잡지 않는다.
+  assert.ok(largest <= container.length, `할당 ${largest}바이트`);
+});
+
+test('미니 스트림 크기 검사는 정상 컨테이너를 막지 않는다', () => {
+  // 위 검사가 지나치게 넓으면 멀쩡한 파일이 corruptContainer 로 죽는다.
+  const cfb = openCfb(sampleContainer());
+  assert.equal(cfb.read('Small').length, 100);
 });
 
 test('스트림 상한은 ZIP 엔트리 상한과 같은 값이다', () => {
