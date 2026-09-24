@@ -12,6 +12,11 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 
+// 연결은 lib/db/client.mjs 하나로 모았다. 'error' 리스너와 DATABASE_URL 검사가
+// 거기 들어 있다(995ad38). pg 자체는 client.mjs 안에서 동적으로 import 되므로,
+// DB 가 필요 없는 `migrate.mjs new` 는 여전히 드라이버 없이도 돈다.
+import { connect } from '../lib/db/client.mjs';
+
 const MIGRATIONS_DIR = path.join(process.cwd(), 'migrations');
 // 같은 순간에 두 배포가 겹쳐도 한 쪽만 적용하도록 잡는 자문 잠금 키.
 const LOCK_KEY = 8_927_413_550_117n;
@@ -51,19 +56,6 @@ async function createMigration(name) {
     `-- ${slug}\n-- 이 파일은 하나의 트랜잭션으로 실행됩니다.\n-- 적용된 뒤에는 수정하지 마세요. 새 마이그레이션을 추가하세요.\n\n`,
   );
   console.log(`생성됨: ${path.relative(process.cwd(), file)}`);
-}
-
-async function connect() {
-  // pg 는 여기서만 필요하다. 최상위에서 import 하면 DB 가 필요 없는
-  // `migrate.mjs new` 조차 의존성 없이는 못 돌아간다.
-  const { default: pg } = await import('pg');
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error('DATABASE_URL 이 설정되지 않았습니다.');
-  }
-  const client = new pg.Client({ connectionString });
-  await client.connect();
-  return client;
 }
 
 async function run({ dryRun }) {
