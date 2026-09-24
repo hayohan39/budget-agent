@@ -13,7 +13,13 @@ import { useState } from "react";
 const FILE_FIELD = "files";
 const MAX_FILE_COUNT = 3;
 
-/** 경고 코드 -> 사람이 읽는 문장. 서버는 코드만 보낸다. */
+/**
+ * 경고 코드 -> 사람이 읽는 문장. 서버는 코드만 보낸다.
+ *
+ * 앞 6개는 파싱 단계(lib/import/statement.mjs 의 collectWarnings)에서,
+ * 뒤 2개는 분류 단계에서 나온다. 문장에는 거래 내용이 들어가지 않는다 —
+ * 서버가 코드만 보내므로 여기서 지어낼 수 있는 것도 일반적인 설명뿐이다.
+ */
 const WARNING_TEXT: Record<string, string> = {
   truncationSuspected: "표시 상한에 걸려 뒷부분이 잘렸을 수 있습니다",
   timestampTies: "같은 시각에 여러 건이 있습니다",
@@ -21,7 +27,29 @@ const WARNING_TEXT: Record<string, string> = {
   balanceMissing: "거래 후 잔액이 비어 있는 행이 있습니다",
   balanceMismatch: "잔액 검산이 맞지 않는 구간이 있습니다",
   jointAccount: "모임통장입니다",
+  // 규칙을 읽지 못해 이 파일은 통째로 미분류로 저장됐다. 거래는 들어갔다.
+  classificationSkipped: "분류 규칙을 읽지 못해 미분류로 저장했습니다 (거래는 저장되었습니다)",
+  // 규칙 중 일부가 정규식으로 컴파일되지 않아 그 규칙만 건너뛰었다.
+  rulePatternSkipped: "사용할 수 없는 분류 규칙이 있어 그 규칙만 건너뛰었습니다",
+  // 아래 5개는 lib/classify/pattern.mjs 가 규칙을 거부할 때 쓰는 코드다.
+  // 지금 업로드 응답은 이것들을 rulePatternSkipped 하나로 묶어 보내지만,
+  // 규칙별 사유를 내보내는 화면이 생기면 그대로 이 표를 쓴다.
+  patternEmpty: "분류 규칙의 패턴이 비어 있습니다",
+  patternTooLong: "분류 규칙의 패턴이 너무 깁니다",
+  patternNestedQuantifier: "분류 규칙의 패턴이 위험한 형태(중첩 반복)라 쓰지 않았습니다",
+  patternRepeatTooLarge: "분류 규칙의 패턴에 반복 횟수가 너무 큰 부분이 있습니다",
+  patternInvalid: "분류 규칙의 패턴이 올바른 정규식이 아닙니다",
 };
+
+/** 표에 없는 코드도 빈칸 대신 읽을 수 있는 문장으로 내보낸다. */
+function warningText(code: string): string {
+  const known = WARNING_TEXT[code];
+  if (known !== undefined) return known;
+  // 서버는 위 코드들만 보낸다. 여기 오는 것은 배포 시점이 어긋난 경우뿐이라
+  // 코드를 그대로 덧붙여 둔다(코드는 스키마의 식별자이지 거래 내용이 아니다).
+  const label = code.trim().slice(0, 64);
+  return label === "" ? "알 수 없는 경고입니다" : `알 수 없는 경고입니다 (${label})`;
+}
 
 type FileResult = {
   filename: string;
@@ -147,7 +175,7 @@ export function ImportForm() {
                         {result.warnings && result.warnings.length > 0 ? (
                           <ul className="list-inside list-disc">
                             {result.warnings.map((code) => (
-                              <li key={code}>{WARNING_TEXT[code] ?? code}</li>
+                              <li key={code}>{warningText(code)}</li>
                             ))}
                           </ul>
                         ) : (
