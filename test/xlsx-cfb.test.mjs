@@ -49,6 +49,46 @@ test('미니 스트림(4096 미만)과 일반 섹터 체인을 모두 읽는다'
   assert.ok(large.every((byte) => byte === 0x42));
 });
 
+test('하위 스토리지의 같은 이름 스트림이 루트의 것을 가리지 못한다', () => {
+  // 실제 암호화 xlsx 에는 `\u0006DataSpaces` 스토리지가 들어 있고 그 안에도
+  // 스트림이 여럿 있다. 이름을 컨테이너 전체에서 찾으면, 디렉터리에서 먼저
+  // 나오는 하위 스토리지의 미끼가 진짜 EncryptionInfo 를 가릴 수 있다.
+  const decoy = Buffer.alloc(80, 0xde);
+  const real = Buffer.alloc(96, 0x11);
+  const container = buildCfb([
+    { name: '\u0006DataSpaces', storage: [{ name: 'EncryptionInfo', data: decoy }] },
+    { name: 'EncryptionInfo', data: real },
+    { name: 'EncryptedPackage', data: Buffer.alloc(120, 0x22) },
+  ]);
+
+  // 미끼가 디렉터리에서 정말 먼저 나오는지부터 본다 — 순서가 반대라면 이
+  // 시험은 아무것도 증명하지 못한다. 엔트리 이름은 엔트리 시작 오프셋에 있고
+  // 크기 필드는 그로부터 120바이트 뒤다.
+  const needle = Buffer.from('EncryptionInfo', 'utf16le');
+  const first = container.indexOf(needle);
+  const second = container.indexOf(needle, first + 1);
+  assert.ok(first >= 0 && second > first);
+  assert.equal(container.readUInt32LE(first + 120), decoy.length);
+  assert.equal(container.readUInt32LE(second + 120), real.length);
+
+  const cfb = openCfb(container);
+  const info = cfb.read('EncryptionInfo');
+  assert.equal(info.length, real.length);
+  assert.ok(info.every((byte) => byte === 0x11));
+  // 하위 스토리지의 스트림은 아예 보이지 않는다. 스토리지 자체도 스트림이 아니다.
+  assert.deepEqual(cfb.names().sort(), ['EncryptedPackage', 'EncryptionInfo']);
+});
+
+test('루트 스토리지 안에서 이름이 겹치면 고르지 않고 거절한다', () => {
+  // 어느 쪽을 고르든 "골랐다" 고 말할 수 없는 컨테이너다. 조용히 하나를
+  // 집는 대신 던진다.
+  const container = buildCfb([
+    { name: 'EncryptionInfo', data: Buffer.alloc(80, 0xde) },
+    { name: 'EncryptionInfo', data: Buffer.alloc(96, 0x11) },
+  ]);
+  assert.throws(() => openCfb(container), /OLE2/);
+});
+
 test('없는 스트림을 읽으려 하면 이름만 알리고 던진다', () => {
   const cfb = openCfb(sampleContainer());
   assert.throws(() => cfb.read('EncryptionInfo'), /EncryptionInfo/);

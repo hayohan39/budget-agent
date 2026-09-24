@@ -72,13 +72,58 @@ function ecbEncrypt(key, data) {
 
 // ── OLE2/CFB 쓰기 ──────────────────────────────────────────────────────────
 
+const OBJECT_TYPE_STORAGE = 1;
+const OBJECT_TYPE_STREAM = 2;
+const OBJECT_TYPE_ROOT = 5;
+
+/**
+ * 디렉터리 엔트리를 깊이 우선으로 펼친다. 배열 위치가 곧 디렉터리 인덱스라서,
+ * 스토리지의 자식은 그 스토리지 **바로 뒤** 그리고 뒤따르는 형제보다 **앞**에
+ * 놓인다. 하위 스토리지의 스트림이 루트의 같은 이름 스트림보다 디렉터리에서
+ * 먼저 나오는 배치를 만들 수 있어야 해서 이 순서를 쓴다.
+ *
+ * @returns {number[]} 이 층 형제들의 디렉터리 인덱스
+ */
+function flattenDirectory(items, nodes) {
+  const indices = [];
+  for (const item of items) {
+    indices.push(nodes.length);
+    if (Array.isArray(item.storage)) {
+      const node = {
+        name: item.name,
+        type: OBJECT_TYPE_STORAGE,
+        data: null,
+        start: 0,
+        size: 0,
+        children: [],
+      };
+      nodes.push(node);
+      node.children = flattenDirectory(item.storage, nodes);
+    } else {
+      nodes.push({
+        name: item.name,
+        type: OBJECT_TYPE_STREAM,
+        data: item.data,
+        start: null,
+        size: item.data.length,
+        children: [],
+      });
+    }
+  }
+  return indices;
+}
+
 /**
  * 스트림 목록으로 OLE2 복합 문서(v3, 512바이트 섹터)를 만든다.
  *
  * 4096바이트 미만인 스트림은 미니 스트림에, 그 이상은 일반 섹터 체인에 둔다 —
  * 실제 파일과 같은 배치라서 리더의 두 경로가 모두 걸린다.
  *
- * @param {Array<{name: string, data: Buffer}>} streams
+ * 항목은 스트림(`{ name, data }`) 이거나 스토리지(`{ name, storage: [...] }`)다.
+ * 스토리지는 실제 파일의 `\u0006DataSpaces` 처럼 자식을 품는다 — 같은 이름이
+ * 층을 달리해 겹치는 컨테이너를 만들 수 있어야 해서 쓴다.
+ *
+ * @param {Array<{name: string, data?: Buffer, storage?: Array<object>}>} streams
  * @returns {Buffer}
  */
 export function buildCfb(streams) {
@@ -100,76 +145,86 @@ export function buildCfb(streams) {
     return start;
   }
 
+  // 0. 디렉터리 엔트리를 먼저 펼친다(루트가 0번).
+  const root = {
+    name: 'Root Entry',
+    type: OBJECT_TYPE_ROOT,
+    data: null,
+    start: 0,
+    size: 0,
+    children: [],
+  };
+  const nodes = [root];
+  root.children = flattenDirectory(streams, nodes);
+  const streamNodes = nodes.filter((node) => node.type === OBJECT_TYPE_STREAM);
+
   // 1. 미니 스트림에 들어갈 것들을 먼저 모은다.
   const miniChunks = [];
   const miniFat = [];
-  const placement = new Map();
   let miniSectorCount = 0;
 
-  for (const stream of streams) {
-    if (stream.data.length >= MINI_CUTOFF || stream.data.length === 0) continue;
-    const count = Math.ceil(stream.data.length / MINI_SECTOR_BYTES);
+  for (const node of streamNodes) {
+    if (node.size >= MINI_CUTOFF || node.size === 0) continue;
+    const count = Math.ceil(node.size / MINI_SECTOR_BYTES);
     const start = miniSectorCount;
     for (let i = 0; i < count; i += 1) {
       const chunk = Buffer.alloc(MINI_SECTOR_BYTES);
-      stream.data.copy(
+      node.data.copy(
         chunk,
         0,
         i * MINI_SECTOR_BYTES,
-        Math.min(stream.data.length, (i + 1) * MINI_SECTOR_BYTES),
+        Math.min(node.size, (i + 1) * MINI_SECTOR_BYTES),
       );
       miniChunks.push(chunk);
       miniFat.push(start + i + 1);
     }
     miniFat[start + count - 1] = ENDOFCHAIN;
     miniSectorCount += count;
-    placement.set(stream.name, start);
+    node.start = start;
   }
 
   const miniStream = Buffer.concat(miniChunks);
 
   // 2. 일반 섹터에 들어갈 스트림.
-  for (const stream of streams) {
-    if (placement.has(stream.name)) continue;
-    placement.set(stream.name, allocate(stream.data));
+  for (const node of streamNodes) {
+    if (node.start === null) node.start = allocate(node.data);
   }
 
   // 3. 미니 스트림 본체는 루트 엔트리의 체인이다.
-  const rootStart = allocate(miniStream);
+  root.start = allocate(miniStream);
+  root.size = miniStream.length;
 
-  // 4. 디렉터리.
-  const entries = [{ name: 'Root Entry', type: 5, start: rootStart, size: miniStream.length }];
-  for (const stream of streams) {
-    entries.push({
-      name: stream.name,
-      type: 2,
-      start: placement.get(stream.name),
-      size: stream.data.length,
-    });
+  // 4. 디렉터리. 읽는 쪽(lib/xlsx/cfb.mjs)은 트리를 타지 않지만, 아주 엉터리로
+  //    두지는 않는다: 부모는 child 로 첫 자식만 가리키고, 형제는 right 로 한 줄
+  //    이어지는 퇴화 트리로 만든다.
+  const left = new Array(nodes.length).fill(NOSTREAM);
+  const right = new Array(nodes.length).fill(NOSTREAM);
+  const child = new Array(nodes.length).fill(NOSTREAM);
+  for (let i = 0; i < nodes.length; i += 1) {
+    const kids = nodes[i].children;
+    if (kids.length > 0) child[i] = kids[0];
+    for (let k = 0; k + 1 < kids.length; k += 1) right[kids[k]] = kids[k + 1];
   }
 
   const perSector = SECTOR_BYTES / DIRECTORY_ENTRY_BYTES;
-  const directoryEntryCount = Math.ceil(entries.length / perSector) * perSector;
+  const directoryEntryCount = Math.ceil(nodes.length / perSector) * perSector;
   const directory = Buffer.alloc(directoryEntryCount * DIRECTORY_ENTRY_BYTES);
   for (let i = 0; i < directoryEntryCount; i += 1) {
     const at = i * DIRECTORY_ENTRY_BYTES;
-    directory.writeUInt32LE(NOSTREAM, at + 68); // left
-    directory.writeUInt32LE(NOSTREAM, at + 72); // right
-    directory.writeUInt32LE(NOSTREAM, at + 76); // child
-    if (i >= entries.length) continue;
+    const isUsed = i < nodes.length;
+    directory.writeUInt32LE(isUsed ? left[i] : NOSTREAM, at + 68);
+    directory.writeUInt32LE(isUsed ? right[i] : NOSTREAM, at + 72);
+    directory.writeUInt32LE(isUsed ? child[i] : NOSTREAM, at + 76);
+    if (!isUsed) continue;
 
-    const entry = entries[i];
-    const name = Buffer.from(entry.name, 'utf16le');
+    const node = nodes[i];
+    const name = Buffer.from(node.name, 'utf16le');
     name.copy(directory, at);
     directory.writeUInt16LE(name.length + 2, at + 64);
-    directory.writeUInt8(entry.type, at + 66);
+    directory.writeUInt8(node.type, at + 66);
     directory.writeUInt8(1, at + 67); // black
-    // 읽는 쪽(lib/xlsx/cfb.mjs)은 트리를 타지 않지만, 아주 엉터리로 두지는
-    // 않는다: 루트의 자식에서 오른쪽으로 한 줄로 이어지는 퇴화 트리로 만든다.
-    if (i === 0 && entries.length > 1) directory.writeUInt32LE(1, at + 76);
-    if (i > 0 && i + 1 < entries.length) directory.writeUInt32LE(i + 1, at + 72);
-    directory.writeUInt32LE(entry.start, at + 116);
-    directory.writeUInt32LE(entry.size, at + 120);
+    directory.writeUInt32LE(node.start, at + 116);
+    directory.writeUInt32LE(node.size, at + 120);
   }
   const directoryStart = allocate(directory);
 
