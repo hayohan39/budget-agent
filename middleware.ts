@@ -1,10 +1,21 @@
 // 인증되지 않은 요청은 어떤 페이지 · API 라우트에도 닿지 않는다.
 // 예외는 인증 자체에 필요한 경로(/api/auth/*, /signin) 와 정적 자산뿐이다.
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { auth, isAllowedEmail } from "@/auth";
 
 export default auth((req) => {
-  if (req.auth) return NextResponse.next();
+  // 세션이 있다고 통과시키지 않는다. 화이트리스트를 **요청마다** 다시 본다 —
+  // JWT 세션 쿠키는 ALLOWED_EMAILS 에서 이메일을 뺀 뒤에도 만료 전까지 살아
+  // 있어서, 로그인 시점(auth.ts 의 signIn 콜백)에만 확인하면 명단에서 빠진
+  // 사용자가 쿠키가 죽을 때까지 계속 들어온다.
+  //
+  // 여기가 공통 관문이지만 /api/import · /report 의 개별 검사는 그대로 둔다.
+  // matcher 설정이 한 번 어긋나면 이 관문은 통째로 비켜 가진다(다층 방어).
+  //
+  // isAllowedEmail 은 process.env.ALLOWED_EMAILS 만 읽는 순수 함수라
+  // Edge 런타임에서도 그대로 돈다. auth.ts 는 이미 이 파일이 import 하고 있어
+  // 새로 끌어오는 모듈도 없다.
+  if (req.auth && isAllowedEmail(req.auth.user?.email)) return NextResponse.next();
 
   // API 는 로그인 페이지 HTML 대신 401 을 받는다.
   if (req.nextUrl.pathname.startsWith("/api/")) {
