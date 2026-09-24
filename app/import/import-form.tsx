@@ -36,7 +36,8 @@ const WARNING_TEXT: Record<string, string> = {
   // 규칙별 사유를 내보내는 화면이 생기면 그대로 이 표를 쓴다.
   patternEmpty: "분류 규칙의 패턴이 비어 있습니다",
   patternTooLong: "분류 규칙의 패턴이 너무 깁니다",
-  patternNestedQuantifier: "분류 규칙의 패턴이 위험한 형태(중첩 반복)라 쓰지 않았습니다",
+  patternUnboundedQuantifier:
+    "분류 규칙의 패턴에 끝이 열린 반복(*, +, {n,})이 있어 쓰지 않았습니다",
   patternRepeatTooLarge: "분류 규칙의 패턴에 반복 횟수가 너무 큰 부분이 있습니다",
   patternInvalid: "분류 규칙의 패턴이 올바른 정규식이 아닙니다",
 };

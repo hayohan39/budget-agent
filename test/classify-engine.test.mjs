@@ -210,7 +210,7 @@ test('컴파일되지 않는 규칙은 건너뛰고 나머지는 계속 돈다',
   assert.equal(classifier.ruleCount, 1);
   assert.deepEqual(classifier.skipped, [
     { id: 1, code: PATTERN_REJECTIONS.invalid },
-    { id: 2, code: PATTERN_REJECTIONS.nestedQuantifier },
+    { id: 2, code: PATTERN_REJECTIONS.unboundedQuantifier },
   ]);
   // 살아 있는 규칙은 그대로 동작한다.
   assert.equal(classifier.classify({ description: '코인적립', amount: -1 }).category, '저축');
