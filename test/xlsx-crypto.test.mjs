@@ -361,6 +361,39 @@ test('실제 토스 파일의 standard 파라미터(4.2 / AES-128 / SHA-1)를 �
   assert.equal(descriptor.integrity, null);
 });
 
+test('외부 키 관리(fExternal)는 비밀번호 방식으로 다루지 않고 거절한다', () => {
+  // fExternal 이 선 파일은 키를 문서 바깥에서 받는다는 뜻이다. 버전(4.2)만
+  // 보고 비밀번호 방식이라 단정하면 엉뚱한 키를 만들어 "비밀번호가 틀렸다"
+  // 고 답하게 된다 — 사실이 아닌 답이라 사용자가 없는 비밀번호를 찾게 된다.
+  const blob = encryptStandard(plainBuffer(), PASSWORD, {
+    keyBits: 128,
+    flags: 0x24 | 0x10, // fCryptoAPI | fAES | fExternal
+  });
+  const result = decryptOoxml(blob, PASSWORD);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, DECRYPT_ERRORS.unsupportedEncryption);
+  assert.notEqual(result.error, DECRYPT_ERRORS.wrongPassword);
+});
+
+test('fExternal 은 스트림 Flags 에 서 있든 헤더 Flags 에 서 있든 거절한다', () => {
+  // 같은 값이 두 군데 적히는 필드다. 한쪽만 보면 나머지 한쪽으로 빠져나간다.
+  const info = openCfb(encryptStandard(plainBuffer(), PASSWORD, { keyBits: 128 })).read(
+    ENCRYPTION_INFO_STREAM,
+  );
+  assert.equal(parseEncryptionInfo(info).ok, true);
+
+  for (const at of [4, 12]) {
+    const patched = Buffer.from(info);
+    patched.writeUInt32LE(patched.readUInt32LE(at) | 0x10, at);
+    assert.equal(
+      parseEncryptionInfo(patched).error,
+      DECRYPT_ERRORS.unsupportedEncryption,
+      `flags@${at}`,
+    );
+  }
+});
+
 test('짧거나 Buffer 가 아닌 EncryptionInfo 는 corruptContainer 다', () => {
   assert.equal(parseEncryptionInfo(Buffer.alloc(4)).error, DECRYPT_ERRORS.corruptContainer);
   assert.equal(parseEncryptionInfo('x').error, DECRYPT_ERRORS.corruptContainer);

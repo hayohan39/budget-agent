@@ -405,11 +405,16 @@ export function encryptAgile(plain, password, options = {}) {
  *
  * @param {Buffer} plain
  * @param {string} password
- * @param {{keyBits?: number, version?: [number, number]}} [options]
+ * `flags` 는 EncryptionHeaderFlags 다(기본 `0x24` = fCryptoAPI | fAES). 실제
+ * 파일에서도 이 값이었다. 외부 키 관리(`fExternal`, `0x10`)처럼 비밀번호로 풀
+ * 수 없는 파일을 만들어 복호화기가 제대로 거절하는지 보려고 열어 둔다.
+ *
+ * @param {{keyBits?: number, version?: [number, number], flags?: number}} [options]
  * @returns {Buffer} OLE2 복합 문서
  */
 export function encryptStandard(plain, password, options = {}) {
   const [major, minor] = options.version ?? [4, 2];
+  const flags = options.flags ?? 0x24; // fCryptoAPI | fAES
   const keyBits = options.keyBits ?? 256;
   const keyBytes = keyBits / 8;
   const algId = { 16: 0x660e, 24: 0x660f, 32: 0x6610 }[keyBytes];
@@ -435,7 +440,7 @@ export function encryptStandard(plain, password, options = {}) {
 
   const cspName = Buffer.from('Microsoft Enhanced RSA and AES Cryptographic Provider\u0000', 'utf16le');
   const encryptionHeader = Buffer.concat([
-    uint32le(0x24), // Flags: fCryptoAPI | fAES
+    uint32le(flags), // EncryptionHeader.Flags
     uint32le(0), // SizeExtra
     uint32le(algId),
     uint32le(0x8004), // AlgIDHash: SHA-1
@@ -452,7 +457,7 @@ export function encryptStandard(plain, password, options = {}) {
 
   const info = Buffer.concat([
     version, // EncryptionVersionInfo (기본 4.2 — 실제 파일과 같다)
-    uint32le(0x24), // Flags
+    uint32le(flags), // 스트림 Flags (헤더의 Flags 와 같은 값이다)
     uint32le(encryptionHeader.length),
     encryptionHeader,
     uint32le(16), // SaltSize
