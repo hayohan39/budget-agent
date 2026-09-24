@@ -1,20 +1,35 @@
 // 월별 현금흐름표의 **표 서식**. 숫자는 lib/report/monthly.mjs 가 만든다.
 //
-// 최종 정산표 양식이 아직 확정되지 않았다. 그래서 여기는 "읽을 수 있는 평범한
-// 표"로만 두고, 양식이 오면 이 파일 하나만 갈아끼우면 되게 했다 — page.tsx 는
-// 인증 · 달 선택 · 조회만 하고 서식을 모른다.
+// 이 화면은 사용자가 손으로 쓰던 **정산 템플릿(스프레드시트)의 배치를 그대로
+// 옮긴 것**이다. 원본은 한 시트에 월 블록이 세로로 쌓이고, 한 블록이 가로로
+// 세 열 그룹으로 나뉜다.
+//
+//   좌: 수입 · 저축 · 용돈 · 주거비      (메인에서 바로 나가는 돈)
+//   중: 고정비 계좌 · 비상금 계좌        (입금 / 집행 / 이자 / 잔액)
+//   우: 변동비(카드사별) · 종합정산 · 메인 계좌 잔액
+//
+// 원본에서 확인한 항등식 두 개를 그대로 화면에 세운다.
+//
+//   1. 계좌 롤포워드   잔액(당월) = 잔액(전월) + 입금 − 집행 + 이자
+//      원본에서는 이 자리가 손으로 넣던 `보정` 칸이었다. 정체는 통장이자이고,
+//      이제 실거래(`이자입금`)로 자동으로 채워진다(PLAN.md: "이자는 보정이 아니다").
+//   2. 마무리         메인 계좌 잔액(당월) − [잔액(전월) + 종합정산 합계] = 0
+//      원본에서는 이 잔차를 회색 `보정` 칸에 손으로 적어 맞췄다. 이 화면은
+//      그 자리에 **검산 차액**을 놓는다. 0 이 아니면 덮지 않고 드러낸다.
 //
 // ── 부호 ──────────────────────────────────────────────────────────────────
 //
 // 저장된 부호 규약(입금 + / 출금 −)을 **그대로 보여 준다.** 화면에서 지출을
 // 양수로 뒤집지 않는다. 뒤집으면 어떤 칸이 뒤집힌 값인지 사람이 매번 기억해야
 // 하고, 검산 차액의 부호를 읽을 때 정확히 반대로 이해하게 된다.
-// 대신 흐름(수입·지출·증감)에는 `+`/`−` 를 항상 붙여 표시가 모호하지 않게 한다.
+// 원본 템플릿도 지출을 음수로 적고 있어 규약이 같다.
 //
 // ── 여기에 없는 것 ────────────────────────────────────────────────────────
 //
 // 행 단위 내역이 없다. 적요 · 거래 일시 · 계좌번호 · 뒤 4자리는 이 파일이
 // 받는 데이터에 애초에 들어 있지 않고, 미분류는 **건수**로만 나온다.
+// 원본의 `선용 월급` · `지현 ISA` 같은 **항목 단위** 줄도 없다 — 집계가
+// 분류 단위까지만 내려간다. 없는 줄을 지어내지 않고 빈 채로 둔다.
 import type { aggregateMonthly } from "@/lib/report/monthly.mjs";
 import type { verifyMonthlyReport } from "@/lib/report/verify.mjs";
 
@@ -54,7 +69,7 @@ const VERIFY_REASON_TEXT: Record<string, string> = {
 };
 
 /**
- * 계좌별 잔액 변화 표에서 쓰는 같은 코드의 문장.
+ * 계좌별 잔액 표에서 쓰는 같은 코드의 문장.
  *
  * 검산 배너는 "메인 계좌" 를 말해도 되지만 이 표는 계좌마다 한 줄이라 같은
  * 문장을 쓰면 고정비 줄에 "메인 계좌 거래가 없습니다" 가 찍힌다.
@@ -77,52 +92,210 @@ function balanceReasonText(reason: string | null): string {
   return reasonText(BALANCE_REASON_TEXT, reason);
 }
 
-const CELL = "px-3 py-2";
-const NUM = `${CELL} text-right tabular-nums whitespace-nowrap`;
+// ── 표 조각 ────────────────────────────────────────────────────────────────
 
-function SectionRow({
-  title,
-  note,
-  total,
-  count,
-}: {
-  title: string;
-  note?: string;
-  total: number;
-  count?: number;
-}) {
+const BOX = "w-full border-collapse text-sm";
+const LINE = "border border-zinc-300 dark:border-zinc-700";
+const CELL = `${LINE} px-2 py-1`;
+const NUM = `${CELL} text-right tabular-nums whitespace-nowrap`;
+const HEAD = `${CELL} text-center text-xs font-normal text-zinc-500`;
+/** 원본의 색칠한 줄. 합계·잔액처럼 눈이 먼저 가야 하는 칸이다. */
+const TONE: Record<string, string> = {
+  income: "bg-emerald-50 font-medium dark:bg-emerald-950/40",
+  fixed: "bg-amber-50 font-medium dark:bg-amber-950/40",
+  emergency: "bg-rose-50 font-medium dark:bg-rose-950/40",
+  main: "bg-emerald-50 font-semibold dark:bg-emerald-950/40",
+  plain: "font-medium",
+};
+
+/** 원본의 `종류 | 항목 | 금액` 머리글. */
+function Head3() {
   return (
-    <tr className="border-t border-zinc-300 bg-zinc-50 font-medium dark:border-zinc-700 dark:bg-zinc-900">
-      <th scope="row" className={`${CELL} text-left`}>
-        {title}
-        {note !== undefined ? (
-          <span className="ml-2 text-xs font-normal text-zinc-500">{note}</span>
-        ) : null}
+    <tr>
+      <th scope="col" className={HEAD}>
+        종류
       </th>
-      <td className={NUM}>{flow(total)}</td>
-      <td className={`${NUM} text-zinc-500`}>{count === undefined ? "" : `${count}건`}</td>
+      <th scope="col" className={HEAD}>
+        항목
+      </th>
+      <th scope="col" className={HEAD}>
+        금액
+      </th>
     </tr>
   );
 }
 
-function ItemRow({
+/** 표 아래쪽의 `합계` · `잔액` 처럼 앞 두 칸을 합친 줄. */
+function WideRow({
   label,
-  total,
-  count,
-  depth = 1,
+  value,
+  tone,
+  note,
 }: {
   label: string;
-  total: number;
-  count?: number;
-  depth?: number;
+  value: string;
+  tone?: keyof typeof TONE;
+  note?: string;
 }) {
   return (
-    <tr className="border-t border-zinc-200 dark:border-zinc-800">
-      <td className={`${CELL} ${depth > 1 ? "pl-12" : "pl-8"}`}>{label}</td>
-      <td className={NUM}>{flow(total)}</td>
-      <td className={`${NUM} text-zinc-500`}>{count === undefined ? "" : `${count}건`}</td>
+    <tr className={tone === undefined ? undefined : TONE[tone]}>
+      <th scope="row" colSpan={2} className={`${CELL} text-center font-normal`}>
+        {label}
+        {note !== undefined ? (
+          <span className="ml-1 text-xs text-zinc-500">{note}</span>
+        ) : null}
+      </th>
+      <td className={NUM}>{value}</td>
     </tr>
   );
+}
+
+/**
+ * 원본 좌측/우측 그룹의 표 하나.
+ *
+ * `종류` 칸은 세로로 병합되고, 아래에 항목 줄이 붙고, 마지막이 `합계` 다.
+ * 항목이 없으면 빈 줄 하나를 둔다 — 원본에도 빈 줄이 그대로 있다.
+ */
+function KindTable({
+  kind,
+  items,
+  total,
+  tone,
+  caption,
+}: {
+  kind: string;
+  items: SectionItem[];
+  total: number;
+  tone?: keyof typeof TONE;
+  caption: string;
+}) {
+  return (
+    <table className={BOX}>
+      <caption className="sr-only">{caption}</caption>
+      <thead>
+        <Head3 />
+      </thead>
+      <tbody>
+        {items.length === 0 ? (
+          <tr>
+            <th scope="row" className={`${CELL} text-center`}>
+              {kind}
+            </th>
+            <td className={CELL}>&nbsp;</td>
+            <td className={NUM}>&nbsp;</td>
+          </tr>
+        ) : (
+          items.map((item, index) => (
+            <tr key={item.key}>
+              {index === 0 ? (
+                <th scope="row" rowSpan={items.length} className={`${CELL} text-center`}>
+                  {kind}
+                </th>
+              ) : null}
+              <td className={CELL}>
+                {item.key}
+                <span className="ml-1 text-xs text-zinc-500">{item.count}건</span>
+              </td>
+              <td className={NUM}>{flow(item.total)}</td>
+            </tr>
+          ))
+        )}
+        <WideRow label="합계" value={flow(total)} tone={tone ?? "plain"} />
+      </tbody>
+    </table>
+  );
+}
+
+/**
+ * 원본 중앙 그룹의 계좌 표.
+ *
+ * 원본 순서: 입금 → 항목 → 합계(집행) → 보정 → 잔액.
+ * `보정` 자리에는 실거래로 잡히는 **이자**가 온다. 그리고 원본에는 없던
+ * `순증감` 을 한 줄 더 둔다 — 이자가 이 계좌의 집행을 상계한 값이다.
+ */
+function AccountTable({
+  block,
+  balance,
+}: {
+  block: MonthlyReport["계좌블록"][number];
+  balance: MonthlyReport["계좌별잔액변화"][number] | undefined;
+}) {
+  const tone: keyof typeof TONE = block.role === "fixed" ? "fixed" : "emergency";
+
+  return (
+    <table className={BOX}>
+      <caption className="sr-only">{block.nickname} 계좌</caption>
+      <thead>
+        <Head3 />
+      </thead>
+      <tbody>
+        <WideRow label="입금" value={flow(block.입금.total)} note="메인에서" />
+        <tr>
+          <th scope="row" className={`${CELL} text-center`}>
+            {block.nickname}
+          </th>
+          <td className={CELL}>&nbsp;</td>
+          <td className={NUM}>&nbsp;</td>
+        </tr>
+        <WideRow label="합계" value={flow(block.집행.total)} note="집행" />
+        <WideRow label="이자" value={flow(block.이자.total)} />
+        <WideRow label="순증감" value={flow(block.순증감)} note="입금 + 이자 − 집행" tone="plain" />
+        <WideRow
+          label="잔액"
+          value={balance?.derived === true ? plain(balance.closing) : "—"}
+          tone={tone}
+          note={
+            balance === undefined || balance.derived
+              ? undefined
+              : `(${balanceReasonText(balance.reason)})`
+          }
+        />
+      </tbody>
+    </table>
+  );
+}
+
+/** 우측 종합정산 표의 한 줄. 원본은 `항목 | 금액` 두 칸이다. */
+function SummaryRow({
+  label,
+  value,
+  tone,
+  note,
+}: {
+  label: string;
+  value: string;
+  tone?: keyof typeof TONE;
+  note?: string;
+}) {
+  return (
+    <tr className={tone === undefined ? undefined : TONE[tone]}>
+      <th scope="row" className={`${CELL} text-left font-normal`}>
+        {label}
+        {note !== undefined ? (
+          <span className="ml-1 text-xs text-zinc-500">{note}</span>
+        ) : null}
+      </th>
+      <td className={NUM}>{value}</td>
+    </tr>
+  );
+}
+
+// ── 값 꺼내기 ──────────────────────────────────────────────────────────────
+
+function itemTotal(items: SectionItem[], key: string): number {
+  return items.find((item) => item.key === key)?.total ?? 0;
+}
+
+/** 그 대상의 보정 합계. `sign` 을 주면 그 부호인 것만 더한다. */
+function adjustmentTotal(
+  items: MonthlyReport["보정"]["items"],
+  target: string,
+  sign?: 1 | -1,
+): number {
+  return items
+    .filter((item) => item.target === target)
+    .filter((item) => sign === undefined || (sign === 1 ? item.amount > 0 : item.amount < 0))
+    .reduce((sum, item) => sum + item.amount, 0);
 }
 
 /** 검산 결과. 어긋났다면 표 위에서 가장 먼저 보여야 한다. */
@@ -180,7 +353,7 @@ export function VerifyBanner({
   );
 }
 
-/** 현금흐름표 본문. */
+/** 현금흐름표 본문 — 정산 템플릿 배치. */
 export function ReportView({
   report,
   verification,
@@ -188,7 +361,67 @@ export function ReportView({
   report: MonthlyReport;
   verification: Verification;
 }) {
+  const income = report.수입.items as SectionItem[];
+  const fixed1 = report.고정지출1.items as SectionItem[];
+  const fixed2 = report.고정지출2.items as SectionItem[];
+  const moves = report.계좌간이동.items as SectionItem[];
+  const adjustments = report.보정.items;
   const card = report.변동지출.카드대금;
+  const mainBalance = report.계좌별잔액변화.find((entry) => entry.role === "main");
+
+  // 우측 변동비 표 — 원본은 카드사별 줄만 있다. 카드가 아닌 변동지출(`기타`)은
+  // 원본에 자리가 없지만 버리면 합계가 맞지 않으므로 줄을 하나 더 둔다.
+  const variableItems: SectionItem[] = [
+    ...card.issuers.map((issuer) => ({
+      key: issuer.issuer,
+      total: issuer.total,
+      count: issuer.count,
+    })),
+    { key: "기타", total: report.변동지출.기타.total, count: report.변동지출.기타.count },
+  ];
+
+  // 종합정산. 원본의 `고정비` · `비상금` 줄은 그 계좌로 **옮긴 돈**이다.
+  // 이 레포에서는 계좌 간 이동으로 빠져 있으므로 고정지출2 와 합쳐서 되돌린다.
+  const 고정비 = itemTotal(fixed2, "고정비") + itemTotal(moves, "고정비");
+  const 비상금 = itemTotal(fixed2, "비상금") + itemTotal(moves, "비상금");
+  const 기타이체 = itemTotal(moves, "기타");
+
+  const summaryRows: Array<{ label: string; value: number | null; note?: string }> = [
+    { label: "수입", value: report.종합정산.수입 },
+    { label: "수입 보정", value: adjustmentTotal(adjustments, "수입") },
+    { label: "저축", value: itemTotal(fixed1, "저축") },
+    { label: "저축 보정", value: adjustmentTotal(adjustments, "저축") },
+    { label: "용돈", value: itemTotal(fixed1, "용돈") },
+    { label: "주거비", value: itemTotal(fixed1, "주거비") },
+    { label: "고정비", value: 고정비, note: "계좌 이체 포함" },
+    { label: "비상금", value: 비상금, note: "계좌 이체 포함" },
+    { label: "비상금 보정", value: adjustmentTotal(adjustments, "비상금") },
+    { label: "변동비", value: report.종합정산.변동지출 },
+    { label: "변동비 보정(+)", value: adjustmentTotal(adjustments, "변동비", 1) },
+    { label: "변동비 보정(-)", value: adjustmentTotal(adjustments, "변동비", -1) },
+    // 원본에 있지만 이 앱이 추적하지 않는 줄. 지어내지 않고 빈 칸으로 둔다.
+    { label: "현금 보유", value: null, note: "추적하지 않습니다" },
+  ];
+
+  // 원본에 자리가 없는 보정 대상(용돈 · 주거비 · 고정비)과 목적지를 모르는
+  // 이체. 0 이면 줄을 만들지 않고, 값이 있으면 반드시 보인다 — 합계에서만
+  // 조용히 사라지는 돈이 없어야 한다.
+  for (const target of ["용돈", "주거비", "고정비"]) {
+    const total = adjustmentTotal(adjustments, target);
+    if (total !== 0) summaryRows.push({ label: `${target} 보정`, value: total });
+  }
+  if (기타이체 !== 0) {
+    summaryRows.push({ label: "기타 이체", value: 기타이체, note: "목적지 미확인" });
+  }
+
+  const shown = summaryRows.reduce((sum, item) => sum + (item.value ?? 0), 0);
+  // 합계는 집계가 낸 값을 그대로 쓴다. 위 줄들의 합과 어긋나면 표가 무언가를
+  // 빠뜨린 것이므로 차액을 드러낸다(조용히 맞추지 않는다).
+  const 합계 = report.종합정산.보정후순증감;
+  const missing = 합계 - shown;
+
+  // 원본 마지막 두 줄. 회색 `보정` 자리에 검산 차액이 온다.
+  const residual = verification.checked ? verification.difference : null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -199,125 +432,126 @@ export function ReportView({
 
       <p className="text-xs text-zinc-500">
         금액은 저장된 부호 그대로입니다 — {report.signConvention}. 지출은 −, 입금은 +
-        로 표시합니다.
+        로 표시합니다. 배치는 기존 정산 템플릿을 따르며, 항목(예: 월급 · ISA) 단위
+        줄은 집계가 분류 단위까지만 내려가 비어 있습니다.
       </p>
 
-      <table className="w-full border-collapse text-sm">
-        <caption className="sr-only">{report.yearMonth} 월별 현금흐름표</caption>
-        <thead>
-          <tr className="text-xs text-zinc-500">
-            <th scope="col" className={`${CELL} text-left font-normal`}>
-              항목
-            </th>
-            <th scope="col" className={`${CELL} text-right font-normal`}>
-              금액
-            </th>
-            <th scope="col" className={`${CELL} text-right font-normal`}>
-              건수
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          <SectionRow title="수입" total={report.수입.total} count={report.수입.count} />
-          {report.수입.items.map((item) => (
-            <ItemRow key={item.key} label={item.key} total={item.total} count={item.count} />
-          ))}
-
-          <SectionRow
-            title="고정지출1"
-            note="저축 · 용돈 · 주거비"
-            total={report.고정지출1.total}
-            count={report.고정지출1.count}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        {/* 좌: 메인에서 바로 나가는 돈 */}
+        <div className="flex flex-col gap-4">
+          <KindTable
+            kind="수입"
+            items={income}
+            total={report.수입.total}
+            tone="income"
+            caption={`${report.yearMonth} 수입`}
           />
-          {report.고정지출1.items.map((item: SectionItem) => (
-            <ItemRow key={item.key} label={item.key} total={item.total} count={item.count} />
+          {fixed1.map((item) => (
+            <KindTable
+              key={item.key}
+              kind={item.key}
+              items={[]}
+              total={item.total}
+              caption={`${report.yearMonth} ${item.key}`}
+            />
           ))}
+        </div>
 
-          <SectionRow
-            title="고정지출2"
-            note="고정비 · 비상금"
-            total={report.고정지출2.total}
-            count={report.고정지출2.count}
-          />
-          {report.고정지출2.items.map((item: SectionItem) => (
-            <ItemRow key={item.key} label={item.key} total={item.total} count={item.count} />
-          ))}
+        {/* 중: 메인이 아닌 계좌 */}
+        <div className="flex flex-col gap-4">
+          {report.계좌블록.length === 0 ? (
+            <p className="text-sm text-zinc-500">메인 외 계좌가 등록되어 있지 않습니다.</p>
+          ) : (
+            report.계좌블록.map((block) => (
+              <AccountTable
+                key={block.role}
+                block={block}
+                balance={report.계좌별잔액변화.find((entry) => entry.role === block.role)}
+              />
+            ))
+          )}
+          <p className="text-xs text-zinc-500">
+            이 계좌들의 입금은 메인에서 간 돈이라 오른쪽 종합정산의 수입으로 세지
+            않습니다. 이자도 수입으로 올리지 않고 <strong>그 계좌 안에서 집행을
+            상계</strong>합니다(순증감). 원본 템플릿에서 손으로 넣던 소액 ‘보정’ 칸이
+            바로 이 이자였고, 이제 실거래로 채워집니다.
+          </p>
+        </div>
 
-          <SectionRow
-            title="변동지출"
+        {/* 우: 변동비 · 종합정산 · 메인 계좌 잔액 */}
+        <div className="flex flex-col gap-4">
+          <KindTable
+            kind="변동비"
+            items={variableItems}
             total={report.변동지출.total}
-            count={report.변동지출.count}
-          />
-          <ItemRow label="카드대금" total={card.total} count={card.count} />
-          {card.issuers.map((issuer) => (
-            <ItemRow
-              key={issuer.issuer}
-              label={issuer.issuer}
-              total={issuer.total}
-              count={issuer.count}
-              depth={2}
-            />
-          ))}
-          <ItemRow
-            label="기타"
-            total={report.변동지출.기타.total}
-            count={report.변동지출.기타.count}
+            caption={`${report.yearMonth} 변동비`}
           />
 
-          <SectionRow
-            title="계좌간이동"
-            note="수입도 지출도 아니다. 메인 잔액은 실제로 줄어든다"
-            total={report.계좌간이동.total}
-            count={report.계좌간이동.count}
-          />
-          {report.계좌간이동.items.map((item) => (
-            <ItemRow key={item.key} label={item.key} total={item.total} count={item.count} />
-          ))}
+          <table className={BOX}>
+            <caption className="sr-only">{report.yearMonth} 종합정산</caption>
+            <thead>
+              <tr>
+                <th scope="col" className={HEAD}>
+                  항목
+                </th>
+                <th scope="col" className={HEAD}>
+                  금액
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {summaryRows.map((item) => (
+                <SummaryRow
+                  key={item.label}
+                  label={item.label}
+                  value={item.value === null ? "—" : flow(item.value)}
+                  note={item.note}
+                />
+              ))}
+              {missing === 0 ? null : (
+                <SummaryRow
+                  label="표에 싣지 못한 항목"
+                  value={flow(missing)}
+                  note="합계와 위 줄들의 차액"
+                />
+              )}
+              <SummaryRow label="합계" value={flow(합계)} tone="plain" />
+            </tbody>
+          </table>
 
-          <SectionRow title="보정" total={report.보정.total} count={report.보정.count} />
-          {report.보정.items.map((item, index) => (
-            <ItemRow
-              key={`${item.target}-${index}`}
-              label={`${item.target} — ${item.reason}`}
-              total={item.amount}
-            />
-          ))}
-        </tbody>
-      </table>
-
-      <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">종합정산</h2>
-        <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 text-sm">
-          <dt className="text-zinc-500">수입</dt>
-          <dd className="text-right tabular-nums">{flow(report.종합정산.수입)}</dd>
-          <dt className="text-zinc-500">고정지출1</dt>
-          <dd className="text-right tabular-nums">{flow(report.종합정산.고정지출1)}</dd>
-          <dt className="text-zinc-500">고정지출2</dt>
-          <dd className="text-right tabular-nums">{flow(report.종합정산.고정지출2)}</dd>
-          <dt className="text-zinc-500">변동지출</dt>
-          <dd className="text-right tabular-nums">{flow(report.종합정산.변동지출)}</dd>
-          <dt className="text-zinc-500">계좌간이동</dt>
-          <dd className="text-right tabular-nums">{flow(report.종합정산.계좌간이동)}</dd>
-
-          <dt className="border-t border-zinc-300 pt-1 font-medium dark:border-zinc-700">
-            실현순증감
-          </dt>
-          <dd className="border-t border-zinc-300 pt-1 text-right font-medium tabular-nums dark:border-zinc-700">
-            {flow(report.종합정산.실현순증감)}
-          </dd>
-          <dt className="text-zinc-500">보정</dt>
-          <dd className="text-right tabular-nums">{flow(report.종합정산.보정)}</dd>
-          <dt className="font-medium">보정후순증감</dt>
-          <dd className="text-right font-medium tabular-nums">
-            {flow(report.종합정산.보정후순증감)}
-          </dd>
-        </dl>
-      </section>
+          <table className={BOX}>
+            <caption className="sr-only">{report.yearMonth} 검산과 메인 계좌 잔액</caption>
+            <tbody>
+              <tr>
+                <th scope="row" className="px-2 py-1 text-left font-normal text-zinc-500">
+                  검산 차액
+                  <span className="ml-1 text-xs">0 이어야 합니다</span>
+                </th>
+                <td className="px-2 py-1 text-right tabular-nums text-zinc-500">
+                  {residual === null ? "—" : flow(residual)}
+                </td>
+              </tr>
+              <tr className={TONE.main}>
+                <th scope="row" className={`${CELL} text-left`}>
+                  메인 계좌 잔액
+                </th>
+                <td className={NUM}>
+                  {mainBalance?.derived === true ? plain(mainBalance.closing) : "—"}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
           계좌별 잔액 변화
         </h2>
+        <p className="text-xs text-zinc-500">
+          원본 템플릿에는 없는 보조 표입니다. 위 ‘잔액’ 칸이 어디서 나왔는지와,
+          잔액을 끌어내지 못한 사유를 여기서 봅니다.
+        </p>
         <table className="w-full border-collapse text-sm">
           <thead>
             <tr className="text-xs text-zinc-500">
@@ -340,7 +574,7 @@ export function ReportView({
           </thead>
           <tbody>
             {report.계좌별잔액변화.map((entry) => (
-              <tr key={entry.role} className="border-t border-zinc-200 dark:border-zinc-800">
+              <tr key={entry.role}>
                 <th scope="row" className={`${CELL} text-left font-normal`}>
                   {entry.nickname}
                   {entry.derived ? null : (
@@ -358,52 +592,6 @@ export function ReportView({
           </tbody>
         </table>
       </section>
-
-      {report.계좌블록.length > 0 ? (
-        <section className="flex flex-col gap-2">
-          <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">계좌블록</h2>
-          <p className="text-xs text-zinc-500">
-            메인이 아닌 계좌. 이 계좌들의 입금은 메인에서 간 돈이라 위 종합정산에서는
-            세지 않습니다. <strong>순증감</strong> 은 그 계좌 안에서만 닫히는 값으로,
-            이자가 그 계좌의 집행을 상계한 뒤의 금액입니다(입금 + 이자 − 집행).
-            이자는 위 수입에 올라가지 않습니다.
-          </p>
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="text-xs text-zinc-500">
-                <th scope="col" className={`${CELL} text-left font-normal`}>
-                  계좌
-                </th>
-                <th scope="col" className={`${CELL} text-right font-normal`}>
-                  입금
-                </th>
-                <th scope="col" className={`${CELL} text-right font-normal`}>
-                  집행
-                </th>
-                <th scope="col" className={`${CELL} text-right font-normal`}>
-                  이자
-                </th>
-                <th scope="col" className={`${CELL} text-right font-normal`}>
-                  순증감 (이자 상계)
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {report.계좌블록.map((block) => (
-                <tr key={block.role} className="border-t border-zinc-200 dark:border-zinc-800">
-                  <th scope="row" className={`${CELL} text-left font-normal`}>
-                    {block.nickname}
-                  </th>
-                  <td className={NUM}>{flow(block.입금.total)}</td>
-                  <td className={NUM}>{flow(block.집행.total)}</td>
-                  <td className={NUM}>{flow(block.이자.total)}</td>
-                  <td className={`${NUM} font-medium`}>{flow(block.순증감)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      ) : null}
 
       <section className="flex flex-col gap-1">
         <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">미분류</h2>
