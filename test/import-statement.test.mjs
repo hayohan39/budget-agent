@@ -216,7 +216,16 @@ test('성공 결과는 트랜잭션으로 감싸여 커밋된다', async () => {
   const client = fakeClient();
   await importStatementBuffer(fixtureBuffer(), { client, accounts: ACCOUNTS });
 
-  assert.equal(client.statements[0], 'BEGIN');
+  // 분류 규칙·가맹점 매핑 읽기는 트랜잭션 **밖**에서 먼저 일어난다(읽기뿐이다).
+  // 감싸야 하는 것은 쓰기다: INSERT 는 BEGIN 과 COMMIT 사이에 있어야 한다.
+  const begin = client.statements.indexOf('BEGIN');
+  const insert = client.statements.findIndex((text) => text.startsWith('INSERT INTO transactions'));
+  assert.ok(begin !== -1, 'BEGIN 이 없다');
+  assert.ok(insert > begin, 'INSERT 가 BEGIN 앞에 있다');
+  assert.ok(
+    client.statements.slice(0, begin).every((text) => text.startsWith('SELECT')),
+    '트랜잭션 시작 전에 쓰기 문장이 나갔다',
+  );
   assert.equal(client.statements.at(-1), 'COMMIT');
 });
 
