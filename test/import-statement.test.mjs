@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { openXlsxFile } from '../lib/xlsx/workbook.mjs';
 import { parseTossStatement } from '../lib/toss/statement.mjs';
 import { INSERT_COLUMNS } from '../lib/db/transactions.mjs';
+import { MAX_DECRYPTED_BYTES, MAX_PASSWORD_LENGTH } from '../lib/xlsx/crypto.mjs';
 import {
   IMPORT_ERROR_MESSAGES,
   MAX_FILE_BYTES,
@@ -24,7 +25,9 @@ import {
   checkWorkbookMagic,
   collectWarnings,
   importStatementBuffer,
+  prepareWorkbookBuffer,
 } from '../lib/import/statement.mjs';
+import { encryptAgile, encryptStandard } from './helpers/ooxml-encrypt.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.join(HERE, 'fixtures', 'toss-sample-masked.xlsx');
@@ -305,4 +308,189 @@ test('실패 결과에도 파일 내용이 들어가지 않는다', async () => 
     if (row.description !== '') assert.ok(!serialized.includes(row.description));
   }
   assert.deepEqual(Object.keys(result).sort(), ['error', 'message', 'ok']);
+});
+
+// ── 암호가 걸린 파일 ───────────────────────────────────────────────────────
+//
+// ⚠️ 여기 쓰는 암호화 파일은 test/helpers/ooxml-encrypt.mjs 가 만든 것이다.
+//    진짜 토스뱅크 파일이 아직 없다. 이 시험들이 보여 주는 것은 경로가 끝까지
+//    돈다는 것과 실패가 안전하게 갈린다는 것이지, 엑셀/토스가 내보내는 파일과의
+//    호환성이 아니다.
+
+/** 이 파일에서 쓰는 "진짜처럼 보이는" 비밀번호. 결과 어디에도 없어야 한다. */
+const FILE_PASSWORD = 'Toss-4f!2Lm';
+
+test('비밀번호를 주면 암호가 걸린 파일도 평문과 같은 결과로 저장된다', async () => {
+  const plain = fixtureBuffer();
+
+  const expected = await importStatementBuffer(plain, {
+    client: fakeClient(),
+    accounts: ACCOUNTS,
+  });
+  assert.equal(expected.ok, true, expected.message);
+
+  for (const encrypt of [encryptAgile, encryptStandard]) {
+    const client = fakeClient();
+    const result = await importStatementBuffer(encrypt(plain, FILE_PASSWORD), {
+      client,
+      accounts: ACCOUNTS,
+      password: FILE_PASSWORD,
+    });
+
+    assert.equal(result.ok, true, result.message);
+    // 평문 경로와 한 글자도 다르지 않아야 한다 — 복호화는 투명해야 한다.
+    assert.deepEqual(result, expected);
+  }
+});
+
+test('비밀번호를 주지 않으면 지금까지처럼 encrypted 로 돌아온다', async () => {
+  const client = fakeClient();
+  const blob = encryptAgile(fixtureBuffer(), FILE_PASSWORD);
+
+  const result = await importStatementBuffer(blob, { client, accounts: ACCOUNTS });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'encrypted');
+  assert.equal(result.message, IMPORT_ERROR_MESSAGES.encrypted);
+  // 복호화를 시도조차 하지 않았으므로 DB 로도 아무것도 가지 않는다.
+  assert.equal(client.statements.length, 0);
+});
+
+test('빈 비밀번호는 "입력하지 않음" 과 같게 다룬다', async () => {
+  const client = fakeClient();
+  const blob = encryptStandard(fixtureBuffer(), FILE_PASSWORD);
+
+  const result = await importStatementBuffer(blob, {
+    client,
+    accounts: ACCOUNTS,
+    password: '',
+  });
+
+  assert.equal(result.error, 'encrypted');
+});
+
+test('틀린 비밀번호는 encrypted 와 다른 코드로 갈린다', async () => {
+  const client = fakeClient();
+  const blob = encryptAgile(fixtureBuffer(), FILE_PASSWORD);
+
+  const result = await importStatementBuffer(blob, {
+    client,
+    accounts: ACCOUNTS,
+    password: '틀린비밀번호',
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'wrongPassword');
+  assert.equal(result.message, IMPORT_ERROR_MESSAGES.wrongPassword);
+  assert.notEqual(result.error, 'encrypted');
+  assert.notEqual(result.error, 'notXlsx');
+  // 파일 내용에 대해 아무 말도 하지 않는다.
+  assert.equal(client.statements.length, 0);
+});
+
+test('비밀번호가 결과에 어떤 형태로도 섞여 나오지 않는다', async () => {
+  const blob = encryptAgile(fixtureBuffer(), FILE_PASSWORD);
+
+  for (const password of [FILE_PASSWORD, '아주-틀린-비밀번호']) {
+    const result = await importStatementBuffer(blob, {
+      client: fakeClient(),
+      accounts: ACCOUNTS,
+      password,
+    });
+    // 이 객체가 그대로 HTTP 응답이 된다. 직렬화해서 통째로 확인한다.
+    const serialised = JSON.stringify(result);
+    assert.equal(serialised.includes(password), false, '비밀번호가 응답에 새어 나왔다');
+    // 뒤집은 것 · 인코딩을 바꾼 것도 없어야 한다.
+    assert.equal(serialised.includes(Buffer.from(password).toString('base64')), false);
+    assert.equal(serialised.includes(encodeURIComponent(password)), false);
+  }
+});
+
+test('상한을 넘는 비밀번호는 파일을 읽기도 전에 거절한다', async () => {
+  const client = fakeClient();
+  const blob = encryptAgile(fixtureBuffer(), FILE_PASSWORD);
+
+  const result = await importStatementBuffer(blob, {
+    client,
+    accounts: ACCOUNTS,
+    password: 'a'.repeat(MAX_PASSWORD_LENGTH + 1),
+  });
+
+  assert.equal(result.error, 'wrongPassword');
+  assert.equal(client.statements.length, 0);
+});
+
+test('풀면 상한을 넘는 파일은 풀기 전에 거절한다', async () => {
+  // 앞 8바이트에 "풀면 이만큼" 을 크게 적은 파일. 그 값을 믿고 메모리를 잡으면
+  // 그 자리에서 프로세스가 죽는다. zip.mjs 의 압축 폭탄 방어와 같은 부류다.
+  const client = fakeClient();
+  const blob = encryptAgile(fixtureBuffer(), FILE_PASSWORD, {
+    declaredSize: MAX_DECRYPTED_BYTES + 1,
+  });
+
+  const result = await importStatementBuffer(blob, {
+    client,
+    accounts: ACCOUNTS,
+    password: FILE_PASSWORD,
+  });
+
+  assert.equal(result.error, 'decryptTooLarge');
+  assert.equal(result.message, IMPORT_ERROR_MESSAGES.decryptTooLarge);
+  assert.equal(client.statements.length, 0);
+});
+
+test('망가진 OLE2 컨테이너는 멈추고 decryptFailed 로 돌아온다', async () => {
+  const blob = encryptAgile(fixtureBuffer(), FILE_PASSWORD);
+
+  for (const length of [600, 1024, 4096, blob.length - 512]) {
+    const client = fakeClient();
+    const result = await importStatementBuffer(blob.subarray(0, length), {
+      client,
+      accounts: ACCOUNTS,
+      password: FILE_PASSWORD,
+    });
+
+    assert.equal(result.ok, false, `length=${length}`);
+    assert.equal(result.error, 'decryptFailed', `length=${length}`);
+    assert.equal(client.statements.length, 0);
+  }
+});
+
+test('무결성 서명이 맞지 않으면 경고로 알리고 저장은 한다', async () => {
+  const client = fakeClient();
+  const blob = encryptAgile(fixtureBuffer(), FILE_PASSWORD, { corruptIntegrity: true });
+
+  const result = await importStatementBuffer(blob, {
+    client,
+    accounts: ACCOUNTS,
+    password: FILE_PASSWORD,
+  });
+
+  // 풀린 바이트는 ZIP 리더가 파트마다 CRC32 로 다시 본다. 뒤에 한 겹이 더
+  // 있으므로 거래를 잃게 만들지 않고 사람에게 알리는 쪽을 고른다.
+  assert.equal(result.ok, true, result.message);
+  assert.ok(result.warnings.includes(WARNING_CODES.decryptIntegrityMismatch));
+});
+
+test('prepareWorkbookBuffer 는 평문을 그대로 통과시킨다', () => {
+  const plain = fixtureBuffer();
+  const prepared = prepareWorkbookBuffer(plain, undefined);
+
+  assert.equal(prepared.ok, true);
+  assert.equal(prepared.buffer, plain, '평문은 복사하지 않고 그대로 쓴다');
+  assert.deepEqual(prepared.warnings, []);
+});
+
+test('prepareWorkbookBuffer 는 빈 버퍼와 쓰레기를 갈라 낸다', () => {
+  assert.equal(prepareWorkbookBuffer(Buffer.alloc(0), FILE_PASSWORD).error, 'empty');
+  assert.equal(prepareWorkbookBuffer(Buffer.from('아무말'), FILE_PASSWORD).error, 'notXlsx');
+});
+
+test('새 실패 코드마다 사람이 읽는 문장이 있다', () => {
+  for (const code of ['encrypted', 'wrongPassword', 'decryptFailed', 'decryptTooLarge']) {
+    assert.equal(typeof IMPORT_ERROR_MESSAGES[code], 'string', code);
+    assert.ok(IMPORT_ERROR_MESSAGES[code].length > 0, code);
+    // 문장에 파일 내용 · 비밀번호가 들어갈 자리가 없다(전부 고정 문자열이다).
+    assert.equal(IMPORT_ERROR_MESSAGES[code].includes('${'), false, code);
+  }
 });
