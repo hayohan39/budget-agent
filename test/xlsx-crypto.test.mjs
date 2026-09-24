@@ -394,6 +394,40 @@ test('fExternal 은 스트림 Flags 에 서 있든 헤더 Flags 에 서 있든 �
   }
 });
 
+test('모르는 ProviderType 은 AES 라고 단정하지 않고 거절한다', () => {
+  // AlgID 0 은 "KeySize 를 보라" 는 뜻이라 알고리즘을 알려 주지 않는다.
+  // ProviderType 까지 보지 않으면 아무 근거 없이 AES 라고 단정하고 키를 만든
+  // 뒤 "비밀번호가 틀렸다" 고 답하게 된다 — 사실이 아닌 답이다.
+  const info = openCfb(encryptStandard(plainBuffer(), PASSWORD, { keyBits: 128 })).read(
+    ENCRYPTION_INFO_STREAM,
+  );
+  assert.equal(info.readUInt32LE(12 + 20), 0x18); // 실제 파일 값: AES
+  assert.equal(parseEncryptionInfo(info).ok, true);
+
+  for (const providerType of [0x01, 0x0d, 0x19, 0xffffffff]) {
+    const patched = Buffer.from(info);
+    patched.writeUInt32LE(providerType, 12 + 20);
+    assert.equal(
+      parseEncryptionInfo(patched).error,
+      DECRYPT_ERRORS.unsupportedEncryption,
+      `providerType=${providerType}`,
+    );
+  }
+
+  // 0 은 "적지 않았다" 는 뜻이다. 그것까지 막으면 멀쩡한 파일을 떨어뜨린다.
+  const unset = Buffer.from(info);
+  unset.writeUInt32LE(0, 12 + 20);
+  assert.equal(parseEncryptionInfo(unset).ok, true);
+});
+
+test('spinCount 상한은 엑셀이 쓰는 100,000 보다 넉넉하되 1,000,000 은 아니다', () => {
+  // 파일이 적어 온 숫자 하나가 요청 하나를 몇 초씩 묶지 못하게 한 값이다.
+  // SHA-512 100만 번이 약 2.0초, 20만 번이 약 0.38초로 측정됐다.
+  assert.equal(MAX_SPIN_COUNT, 200_000);
+  assert.ok(MAX_SPIN_COUNT >= 100_000 * 2, '엑셀이 쓰는 값의 두 배는 받아야 한다');
+  assert.equal(parseEncryptionInfo(agileInfo(agileXml({ spinCount: 100000 }))).ok, true);
+});
+
 test('짧거나 Buffer 가 아닌 EncryptionInfo 는 corruptContainer 다', () => {
   assert.equal(parseEncryptionInfo(Buffer.alloc(4)).error, DECRYPT_ERRORS.corruptContainer);
   assert.equal(parseEncryptionInfo('x').error, DECRYPT_ERRORS.corruptContainer);
