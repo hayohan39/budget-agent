@@ -25,6 +25,16 @@ function allowedEmails(): string[] {
     .filter((email) => email.length > 0);
 }
 
+/**
+ * 화이트리스트 판정. 로그인 시점뿐 아니라 요청마다 다시 확인해야 한다 —
+ * 세션 쿠키는 ALLOWED_EMAILS 에서 이메일을 뺀 뒤에도 만료 전까지 살아 있다.
+ * 비어 있으면 아무도 통과하지 못한다(fail closed).
+ */
+export function isAllowedEmail(email: string | null | undefined): boolean {
+  if (typeof email !== "string" || email.length === 0) return false;
+  return allowedEmails().includes(email.toLowerCase());
+}
+
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
     Google({
@@ -48,9 +58,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   callbacks: {
     // 화이트리스트가 비어 있으면 아무도 들어올 수 없다(fail closed).
     signIn({ profile }) {
-      const email = profile?.email?.toLowerCase();
-      if (!email || profile?.email_verified !== true) return false;
-      return allowedEmails().includes(email);
+      if (profile?.email_verified !== true) return false;
+      return isAllowedEmail(profile?.email);
     },
     // 최초 로그인 시에만 account 가 들어온다. 이후 호출에서는 기존 토큰을 유지한다.
     // 여기 담긴 값은 암호화된 세션 쿠키 안에만 존재한다.
