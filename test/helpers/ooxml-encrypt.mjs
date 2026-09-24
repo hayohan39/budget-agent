@@ -11,7 +11,7 @@
 //
 // 구현 범위는 lib/xlsx/crypto.mjs 가 읽는 것과 같다.
 //   - agile (4.4): AES-CBC + 선택한 해시, dataIntegrity(HMAC) 포함
-//   - standard (3.2): AES-ECB + SHA-1
+//   - standard (4.2 기본 · 3.2 선택): AES-ECB + SHA-1
 import { Buffer } from 'node:buffer';
 import { createCipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
 
@@ -337,17 +337,24 @@ export function encryptAgile(plain, password, options = {}) {
   ]);
 }
 
-// ── standard (3.2) ─────────────────────────────────────────────────────────
+// ── standard (4.2 / 3.2) ───────────────────────────────────────────────────
 
 /**
  * 평문 OOXML(ZIP) 버퍼를 standard 방식(AES-ECB + SHA-1)으로 암호화한다.
  *
+ * 기본값은 **4.2** 다. 실제 토스뱅크 명세서를 구조만 들여다본 결과가 4.2 /
+ * AES-128 / SHA-1 이었다(`AlgID=0x660E`, `AlgIDHash=0x8004`, `KeySize=128`,
+ * `ProviderType=24`, `SaltSize=16`, `VerifierHashSize=20`). 왕복 시험의 기본이
+ * 실제 파일과 같은 버전을 쓰도록 여기서 4.2 를 낸다. 3.2 도 스펙상 유효하고
+ * 복호화기가 받으므로 `version: [3, 2]` 로 따로 시험한다.
+ *
  * @param {Buffer} plain
  * @param {string} password
- * @param {{keyBits?: number}} [options]
+ * @param {{keyBits?: number, version?: [number, number]}} [options]
  * @returns {Buffer} OLE2 복합 문서
  */
 export function encryptStandard(plain, password, options = {}) {
+  const [major, minor] = options.version ?? [4, 2];
   const keyBits = options.keyBits ?? 256;
   const keyBytes = keyBits / 8;
   const algId = { 16: 0x660e, 24: 0x660f, 32: 0x6610 }[keyBytes];
@@ -384,8 +391,12 @@ export function encryptStandard(plain, password, options = {}) {
     cspName,
   ]);
 
+  const version = Buffer.alloc(4);
+  version.writeUInt16LE(major, 0);
+  version.writeUInt16LE(minor, 2);
+
   const info = Buffer.concat([
-    Buffer.from([3, 0, 2, 0]), // major 3, minor 2
+    version, // EncryptionVersionInfo (기본 4.2 — 실제 파일과 같다)
     uint32le(0x24), // Flags
     uint32le(encryptionHeader.length),
     encryptionHeader,

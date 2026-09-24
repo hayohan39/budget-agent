@@ -22,12 +22,14 @@ import { fileURLToPath } from 'node:url';
 
 import {
   DECRYPT_ERRORS,
+  ENCRYPTION_INFO_STREAM,
   MAX_DECRYPTED_BYTES,
   MAX_PASSWORD_LENGTH,
   MAX_SPIN_COUNT,
   decryptOoxml,
   parseEncryptionInfo,
 } from '../lib/xlsx/crypto.mjs';
+import { openCfb } from '../lib/xlsx/cfb.mjs';
 import { MAX_ENTRY_BYTES } from '../lib/xlsx/zip.mjs';
 import { openXlsx, openXlsxFile } from '../lib/xlsx/workbook.mjs';
 import { parseTossStatement } from '../lib/toss/statement.mjs';
@@ -95,14 +97,25 @@ test('agile(4.4, AES-256/SHA-512): 암호화한 것을 그대로 되돌린다', 
   assert.equal(result.data.equals(plain), true);
 });
 
-test('standard(3.2, AES-256/SHA-1): 암호화한 것을 그대로 되돌린다', () => {
+test('standard(4.2, AES-128/SHA-1): 실제 토스 파일과 같은 조합을 되돌린다', () => {
+  // 진짜 토스뱅크 명세서를 구조만 확인한 결과가 이 조합이었다. 왕복 시험의
+  // 기본 자리는 실제 파일이 쓰는 파라미터가 차지해야 한다.
+  const plain = plainBuffer();
+  const result = decryptOoxml(encryptStandard(plain, PASSWORD, { keyBits: 128 }), PASSWORD);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.kind, 'standard');
+  // standard 에는 dataIntegrity 가 아예 없다. 없는 것을 "실패" 로 보지 않는다.
+  assert.equal(result.integrity, 'absent');
+  assert.equal(result.data.equals(plain), true);
+});
+
+test('standard(4.2, AES-256/SHA-1): 더 긴 키도 되돌린다', () => {
   const plain = plainBuffer();
   const result = decryptOoxml(encryptStandard(plain, PASSWORD), PASSWORD);
 
   assert.equal(result.ok, true);
   assert.equal(result.kind, 'standard');
-  // standard 에는 dataIntegrity 가 없다. 없는 것을 "실패" 로 보지 않는다.
-  assert.equal(result.integrity, 'absent');
   assert.equal(result.data.equals(plain), true);
 });
 
@@ -115,11 +128,15 @@ test('agile 의 다른 조합(AES-128/SHA-1)도 되돌린다', () => {
   assert.equal(result.data.equals(plain), true);
 });
 
-test('standard 의 다른 키 길이(AES-128)도 되돌린다', () => {
+test('standard 의 예전 버전 표기(3.2)도 그대로 받는다', () => {
+  // 스펙은 3.2 와 4.2 를 모두 standard 로 정한다. 실제 파일이 4.2 라고 해서
+  // 3.2 를 떨어뜨리면 다른 은행·다른 생성기가 만든 파일을 못 읽게 된다.
   const plain = plainBuffer();
-  const result = decryptOoxml(encryptStandard(plain, PASSWORD, { keyBits: 128 }), PASSWORD);
+  const blob = encryptStandard(plain, PASSWORD, { version: [3, 2] });
+  const result = decryptOoxml(blob, PASSWORD);
 
   assert.equal(result.ok, true);
+  assert.equal(result.kind, 'standard');
   assert.equal(result.data.equals(plain), true);
 });
 
@@ -304,6 +321,44 @@ test('정상 agile 기술자는 파싱된다', () => {
   assert.equal(descriptor.kind, 'agile');
   assert.equal(descriptor.keyData.keyBytes, 32);
   assert.equal(descriptor.encryptedKey.spinCount, 100000);
+});
+
+test('실제 토스 파일의 standard 파라미터(4.2 / AES-128 / SHA-1)를 받아들인다', () => {
+  // 진짜 토스뱅크 명세서를 **구조만** 확인해서 얻은 값이다(복호화하지 않았고
+  // 파일은 저장소에 들어오지 않는다 — 개인 금융 데이터다). 받아들이는 범위를
+  // 좁히는 변경이 있으면, 토스 파일이 조용히 깨지는 대신 이 시험이 이름으로
+  // 먼저 알려 준다.
+  const container = encryptStandard(plainBuffer(), PASSWORD, { keyBits: 128 });
+  const info = openCfb(container).read(ENCRYPTION_INFO_STREAM);
+
+  assert.equal(info.readUInt16LE(0), 4); // EncryptionVersionInfo.Major
+  assert.equal(info.readUInt16LE(2), 2); // EncryptionVersionInfo.Minor
+  assert.equal(info.readUInt32LE(4), 0x24); // 스트림 Flags: fCryptoAPI | fAES
+
+  const headerSize = info.readUInt32LE(8);
+  const header = info.subarray(12, 12 + headerSize);
+  assert.equal(header.readUInt32LE(0), 0x24); // EncryptionHeader.Flags
+  assert.equal(header.readUInt32LE(8), 0x660e); // AlgID: AES-128
+  assert.equal(header.readUInt32LE(12), 0x8004); // AlgIDHash: SHA-1
+  assert.equal(header.readUInt32LE(16), 128); // KeySize
+  assert.equal(header.readUInt32LE(20), 24); // ProviderType: AES
+  assert.equal(
+    header.toString('utf16le', 32).replace(/\u0000[\s\S]*$/, ''),
+    'Microsoft Enhanced RSA and AES Cryptographic Provider',
+  );
+
+  let at = 12 + headerSize;
+  assert.equal(info.readUInt32LE(at), 16); // SaltSize
+  at += 4 + 16 + 16; // salt + EncryptedVerifier
+  assert.equal(info.readUInt32LE(at), 20); // VerifierHashSize (SHA-1)
+
+  const descriptor = parseEncryptionInfo(info);
+  assert.equal(descriptor.ok, true);
+  assert.equal(descriptor.kind, 'standard');
+  assert.equal(descriptor.keyBytes, 16);
+  assert.equal(descriptor.salt.length, 16);
+  // standard 에는 dataIntegrity(HMAC) 기술자가 스펙에 아예 없다.
+  assert.equal(descriptor.integrity, null);
 });
 
 test('짧거나 Buffer 가 아닌 EncryptionInfo 는 corruptContainer 다', () => {
