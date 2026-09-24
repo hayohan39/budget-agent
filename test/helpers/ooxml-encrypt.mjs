@@ -117,7 +117,7 @@ function flattenDirectory(items, nodes) {
 }
 
 /**
- * 스트림 목록으로 OLE2 복합 문서(v3, 512바이트 섹터)를 만든다.
+ * 스트림 목록으로 OLE2 복합 문서를 만든다. 기본은 v3(512바이트 섹터)다.
  *
  * 4096바이트 미만인 스트림은 미니 스트림에, 그 이상은 일반 섹터 체인에 둔다 —
  * 실제 파일과 같은 배치라서 리더의 두 경로가 모두 걸린다.
@@ -126,21 +126,30 @@ function flattenDirectory(items, nodes) {
  * 스토리지는 실제 파일의 `\u0006DataSpaces` 처럼 자식을 품는다 — 같은 이름이
  * 층을 달리해 겹치는 컨테이너를 만들 수 있어야 해서 쓴다.
  *
+ * `sectorBytes: 4096` 을 주면 **v4** 컨테이너가 나온다. v4 는 섹터 크기만
+ * 다른 것이 아니라 머리 영역도 한 섹터(4096바이트)라서, 섹터 오프셋을
+ * `512 + id × SectorSize` 로 계산하는 리더는 v4 에서만 한 섹터씩 어긋난다.
+ * 그 차이를 시험에서 볼 수 있어야 해서 크기를 열어 둔다.
+ *
  * @param {Array<{name: string, data?: Buffer, storage?: Array<object>}>} streams
+ * @param {{sectorBytes?: 512|4096}} [options]
  * @returns {Buffer}
  */
-export function buildCfb(streams) {
+export function buildCfb(streams, options = {}) {
+  const sectorBytes = options.sectorBytes ?? SECTOR_BYTES;
+  const sectorShift = Math.log2(sectorBytes);
+  const major = sectorBytes === SECTOR_BYTES ? 3 : 4;
   const sectors = [];
   const fat = [];
 
   /** 데이터를 512바이트 섹터 체인으로 붙이고 시작 섹터 번호를 돌려준다. */
   function allocate(data) {
     if (data.length === 0) return ENDOFCHAIN;
-    const count = Math.ceil(data.length / SECTOR_BYTES);
+    const count = Math.ceil(data.length / sectorBytes);
     const start = sectors.length;
     for (let i = 0; i < count; i += 1) {
-      const chunk = Buffer.alloc(SECTOR_BYTES);
-      data.copy(chunk, 0, i * SECTOR_BYTES, Math.min(data.length, (i + 1) * SECTOR_BYTES));
+      const chunk = Buffer.alloc(sectorBytes);
+      data.copy(chunk, 0, i * sectorBytes, Math.min(data.length, (i + 1) * sectorBytes));
       sectors.push(chunk);
       fat.push(sectors.length);
     }
@@ -209,7 +218,7 @@ export function buildCfb(streams) {
     for (let k = 0; k + 1 < kids.length; k += 1) right[kids[k]] = kids[k + 1];
   }
 
-  const perSector = SECTOR_BYTES / DIRECTORY_ENTRY_BYTES;
+  const perSector = sectorBytes / DIRECTORY_ENTRY_BYTES;
   const directoryEntryCount = Math.ceil(nodes.length / perSector) * perSector;
   const directory = Buffer.alloc(directoryEntryCount * DIRECTORY_ENTRY_BYTES);
   for (let i = 0; i < directoryEntryCount; i += 1) {
@@ -235,15 +244,15 @@ export function buildCfb(streams) {
   let miniFatStart = ENDOFCHAIN;
   let miniFatSectorCount = 0;
   if (miniFat.length > 0) {
-    const perFatSector = SECTOR_BYTES / 4;
+    const perFatSector = sectorBytes / 4;
     miniFatSectorCount = Math.ceil(miniFat.length / perFatSector);
-    const table = Buffer.alloc(miniFatSectorCount * SECTOR_BYTES, 0xff);
+    const table = Buffer.alloc(miniFatSectorCount * sectorBytes, 0xff);
     for (let i = 0; i < miniFat.length; i += 1) table.writeUInt32LE(miniFat[i], i * 4);
     miniFatStart = allocate(table);
   }
 
   // 6. FAT. FAT 섹터 자신도 FAT 안에 표시되므로 개수가 수렴할 때까지 센다.
-  const perFatSector = SECTOR_BYTES / 4;
+  const perFatSector = sectorBytes / 4;
   let fatSectorCount = 1;
   for (let i = 0; i < 8; i += 1) {
     const needed = Math.ceil((sectors.length + fatSectorCount) / perFatSector);
@@ -256,23 +265,24 @@ export function buildCfb(streams) {
     fatSectorIds.push(sectors.length + i);
     fat.push(FATSECT);
   }
-  for (let i = 0; i < fatSectorCount; i += 1) sectors.push(Buffer.alloc(SECTOR_BYTES));
+  for (let i = 0; i < fatSectorCount; i += 1) sectors.push(Buffer.alloc(sectorBytes));
 
-  const fatTable = Buffer.alloc(fatSectorCount * SECTOR_BYTES, 0xff);
+  const fatTable = Buffer.alloc(fatSectorCount * sectorBytes, 0xff);
   for (let i = 0; i < fat.length; i += 1) fatTable.writeUInt32LE(fat[i], i * 4);
   for (let i = 0; i < fatSectorCount; i += 1) {
-    fatTable.copy(sectors[fatSectorIds[i]], 0, i * SECTOR_BYTES, (i + 1) * SECTOR_BYTES);
+    fatTable.copy(sectors[fatSectorIds[i]], 0, i * sectorBytes, (i + 1) * sectorBytes);
   }
 
   // 7. 헤더.
-  const header = Buffer.alloc(SECTOR_BYTES, 0);
+  const header = Buffer.alloc(sectorBytes, 0);
   Buffer.from('d0cf11e0a1b11ae1', 'hex').copy(header, 0);
   header.writeUInt16LE(0x003e, 24); // minor version
-  header.writeUInt16LE(3, 26); // major version
+  header.writeUInt16LE(major, 26); // major version
   header.writeUInt16LE(0xfffe, 28); // byte order
-  header.writeUInt16LE(9, 30); // sector shift (512)
+  header.writeUInt16LE(sectorShift, 30); // sector shift (512 -> 9, 4096 -> 12)
   header.writeUInt16LE(6, 32); // mini sector shift (64)
-  header.writeUInt32LE(0, 40); // directory sector count (v3 는 0)
+  // 디렉터리 섹터 수: v3 는 0 으로 두고, v4 는 실제 개수를 적는다.
+  header.writeUInt32LE(major === 3 ? 0 : Math.ceil(directory.length / sectorBytes), 40);
   header.writeUInt32LE(fatSectorCount, 44);
   header.writeUInt32LE(directoryStart, 48);
   header.writeUInt32LE(MINI_CUTOFF, 56);

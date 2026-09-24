@@ -83,6 +83,29 @@ test('미니 스트림(4096 미만)과 일반 섹터 체인을 모두 읽는다'
   assert.ok(large.every((byte) => byte === 0x42));
 });
 
+test('v4(4096바이트 섹터) 컨테이너도 섹터 오프셋을 맞게 읽는다', () => {
+  // MS-CFB 는 섹터 n 이 `SectorSize × (n + 1)` 에서 시작한다고 정한다. 즉 머리
+  // 영역은 **한 섹터**이고, v4 에서는 그것이 512 가 아니라 4096바이트다.
+  // `512 + id × SectorSize` 로 계산하면 v4 에서만 한 섹터씩 어긋난다.
+  // readHeader 가 major === 4 를 받아들이므로, 어긋난 채로 여기까지 와서
+  // 멀쩡한 파일이 "다시 내려받아 올려주세요" 로 돌아간다.
+  const container = buildCfb(
+    [
+      { name: 'Small', data: Buffer.alloc(100, 0x41) },
+      { name: 'Large', data: Buffer.alloc(9000, 0x42) },
+    ],
+    { sectorBytes: 4096 },
+  );
+  assert.equal(container.readUInt16LE(26), 4); // major version
+  assert.equal(container.readUInt16LE(30), 12); // sector shift (4096)
+
+  const cfb = openCfb(container);
+  assert.deepEqual(cfb.names().sort(), ['Large', 'Small']);
+  // 미니 경로(4096 미만)와 일반 섹터 경로를 둘 다 지난다.
+  assert.ok(cfb.read('Small').every((byte) => byte === 0x41));
+  assert.ok(cfb.read('Large').every((byte) => byte === 0x42));
+});
+
 test('하위 스토리지의 같은 이름 스트림이 루트의 것을 가리지 못한다', () => {
   // 실제 암호화 xlsx 에는 `\u0006DataSpaces` 스토리지가 들어 있고 그 안에도
   // 스트림이 여럿 있다. 이름을 컨테이너 전체에서 찾으면, 디렉터리에서 먼저
