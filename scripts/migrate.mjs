@@ -12,6 +12,11 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 
+// 연결은 lib/db/client.mjs 하나로 모았다. 'error' 리스너와 DATABASE_URL 검사가
+// 거기 들어 있다(995ad38). pg 자체는 client.mjs 안에서 동적으로 import 되므로,
+// DB 가 필요 없는 `migrate.mjs new` 는 여전히 드라이버 없이도 돈다.
+import { connect } from '../lib/db/client.mjs';
+
 const MIGRATIONS_DIR = path.join(process.cwd(), 'migrations');
 // 같은 순간에 두 배포가 겹쳐도 한 쪽만 적용하도록 잡는 자문 잠금 키.
 const LOCK_KEY = 8_927_413_550_117n;
@@ -51,24 +56,6 @@ async function createMigration(name) {
     `-- ${slug}\n-- 이 파일은 하나의 트랜잭션으로 실행됩니다.\n-- 적용된 뒤에는 수정하지 마세요. 새 마이그레이션을 추가하세요.\n\n`,
   );
   console.log(`생성됨: ${path.relative(process.cwd(), file)}`);
-}
-
-async function connect() {
-  // pg 는 여기서만 필요하다. 최상위에서 import 하면 DB 가 필요 없는
-  // `migrate.mjs new` 조차 의존성 없이는 못 돌아간다.
-  const { default: pg } = await import('pg');
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error('DATABASE_URL 이 설정되지 않았습니다.');
-  }
-  const client = new pg.Client({ connectionString });
-  // 세션 도중 소켓이 끊기면 pg 는 대기 중인 쿼리를 reject 하면서 'error' 도 emit 한다.
-  // 리스너가 없으면 EventEmitter 가 그대로 throw 해서 try/catch 밖으로 빠져나가고,
-  // Node 가 에러 객체 전체를 스택과 함께 로그에 찍는다.
-  // 쿼리 쪽에서 이미 같은 에러를 처리하므로 여기서는 삼켜도 정보가 사라지지 않는다.
-  client.on('error', () => {});
-  await client.connect();
-  return client;
 }
 
 async function run({ dryRun }) {

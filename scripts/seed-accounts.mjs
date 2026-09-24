@@ -17,6 +17,12 @@
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
+// 연결·트랜잭션은 lib/db/client.mjs 하나로 모았다. 이 스크립트에는 pg 의
+// 'error' 리스너가 빠져 있었다 — 세션이 끊기면 EventEmitter 가 try/catch 밖에서
+// throw 하면서 에러 객체 전체가 로그에 찍힌다(995ad38 이 migrate.mjs 에서 고친
+// 것과 같은 버그). 공용 모듈을 쓰면 그 리스너가 항상 붙는다.
+import { withTransaction } from '../lib/db/client.mjs';
+
 // role -> nickname. accounts.role / accounts.nickname 은 각각 UNIQUE 다.
 const NICKNAMES = new Map([
   ['main', '메인'],
@@ -116,33 +122,23 @@ export function resolveAccounts(env, argv) {
 }
 
 async function seed(accounts) {
-  const { default: pg } = await import('pg');
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error('DATABASE_URL 이 설정되지 않았습니다.');
-  }
-  const client = new pg.Client({ connectionString });
-  await client.connect();
   try {
-    await client.query('BEGIN');
-    for (const { role, last4, nickname } of accounts) {
-      // role 이 UNIQUE 이므로 역할 기준으로 갱신한다. 같은 값으로 다시 돌리면
-      // 아무것도 바뀌지 않고, 뒤 4자리가 바뀌었으면 그 값으로 맞춘다.
-      await client.query(
-        `INSERT INTO accounts (nickname, role, last4)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (role) DO UPDATE SET nickname = EXCLUDED.nickname, last4 = EXCLUDED.last4`,
-        [nickname, role, last4],
-      );
-    }
-    await client.query('COMMIT');
+    await withTransaction(async (client) => {
+      for (const { role, last4, nickname } of accounts) {
+        // role 이 UNIQUE 이므로 역할 기준으로 갱신한다. 같은 값으로 다시 돌리면
+        // 아무것도 바뀌지 않고, 뒤 4자리가 바뀌었으면 그 값으로 맞춘다.
+        await client.query(
+          `INSERT INTO accounts (nickname, role, last4)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (role) DO UPDATE SET nickname = EXCLUDED.nickname, last4 = EXCLUDED.last4`,
+          [nickname, role, last4],
+        );
+      }
+    });
   } catch (error) {
-    await client.query('ROLLBACK');
     // 에러 객체를 그대로 출력하지 않고 message 만 쓴다. pg 에러의 detail ·
     // parameters 에는 계좌 뒤 4자리가 섞여 나올 수 있다.
     throw new Error(`계좌 등록에 실패했습니다: ${error.message}`);
-  } finally {
-    await client.end();
   }
 }
 
