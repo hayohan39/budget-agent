@@ -63,7 +63,9 @@
 
 - **내 계좌번호는 토스뱅크가 이미 마스킹해서 준다.** 뒤 4자리만 저장한다
 - ⚠️ **거래 내역의 `계좌번호` 컬럼은 상대방 계좌번호이며 평문이다.**
-  반드시 salt 해시로 변환해 저장한다. 원문을 저장하지 않는다
+  원문을 저장하지 않는다. 실제 구현은 한 걸음 더 나아가 **이 열을 읽지도 저장하지도
+  않는다** — 숫자 셀이라 앞자리 0 이 사라져 해시조차 쓸모가 없다(`transactions`
+  스키마의 `cp_acct_hash` 설명 참고)
 - API 원본 응답을 그대로 보관하는 컬럼을 만들지 않는다
 
 ### 4. 비밀값
@@ -233,10 +235,12 @@ Vercel Hobby 함수 타임아웃이 **10초**다. 1~6 이 한 요청, 7 은 별�
 ```sql
 CREATE TABLE accounts (
   id         SMALLSERIAL PRIMARY KEY,
-  nickname   TEXT    NOT NULL,        -- '메인' | '고정비' | '비상금'
-  role       TEXT    NOT NULL,        -- 'main' | 'fixed' | 'emergency'
-  last4      CHAR(4) NOT NULL UNIQUE, -- 계좌 식별 키
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  nickname   TEXT    NOT NULL UNIQUE,  -- '메인' | '고정비' | '비상금'
+  role       TEXT    NOT NULL UNIQUE,  -- 역할별로 정확히 하나씩만 존재한다
+  last4      CHAR(4) NOT NULL UNIQUE,  -- 계좌 식별 키
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT accounts_role_valid  CHECK (role IN ('main','fixed','emergency')),
+  CONSTRAINT accounts_last4_digits CHECK (last4 ~ '^[0-9]{4}$')
 );
 ```
 
@@ -252,20 +256,38 @@ CREATE TABLE transactions (
   description   TEXT   NOT NULL,   -- 적요
   txn_type      TEXT   NOT NULL,   -- 거래 유형
   institution   TEXT,              -- 거래 기관
-  cp_acct_hash  TEXT,              -- ⚠️ 상대방 계좌번호 salt 해시. 원문 저장 금지
+  cp_acct_hash  TEXT,              -- ⚠️ 항상 NULL 이다. 아래 설명 참고
   amount        BIGINT NOT NULL,   -- 부호 포함
   balance       BIGINT,            -- 거래 후 잔액
   memo          TEXT,
   category      TEXT,
   is_transfer   BOOLEAN NOT NULL DEFAULT FALSE,  -- 내 계좌 간 이동 표시 (집계에서 빼지 않음)
   dedupe_key    TEXT   NOT NULL UNIQUE,
-  year_month    TEXT   NOT NULL,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  year_month    CHAR(7) NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT transactions_year_month_fmt CHECK (year_month ~ '^[0-9]{4}-[0-9]{2}$')
 );
 
-CREATE INDEX ON transactions (year_month);
-CREATE INDEX ON transactions (account_id, txn_at);
+CREATE INDEX transactions_year_month_idx   ON transactions (year_month);
+CREATE INDEX transactions_account_txn_idx  ON transactions (account_id, txn_at DESC);
+-- 미분류 건만 훑는 부분 인덱스. 분류 작업 큐 조회용.
+CREATE INDEX transactions_unclassified_idx ON transactions (year_month) WHERE category IS NULL;
 ```
+
+`year_month` 는 `TEXT` 가 아니라 **`CHAR(7)` + 형식 CHECK** 다. KST 기준 날짜에서
+파생해 저장하며(서버 타임존에 의존하지 않기 위해), 리포트 조회는 이 컬럼을
+파라미터로 받는다. 화면 쪽 검사(`lib/report/months.mjs`)도 같은 정규식을 쓴다.
+
+⚠️ **`cp_acct_hash` 는 영구히 `NULL` 이다.** 원본의 `계좌번호`(상대방 계좌) 열은
+General 서식의 숫자 셀이라 앞자리 0 이 **구조적으로 사라진다**(`1.2341234E7`).
+파서가 이 열을 아예 읽지 않으며(`lib/toss/statement.mjs` 의 `readRow`),
+`lib/toss/normalize.mjs` 는 이 필드를 `null` 로 고정한다. 읽어 봐야 "틀린 값의
+해시"라서 대조도 복원도 되지 않으면서 개인정보 취급 대상만 하나 늘어난다.
+이 컬럼을 채우는 코드 경로는 두지 않는다.
+
+**카드사를 담는 `counterparty` 컬럼은 없다.** 카드대금의 카드사 묶음은 저장하지
+않고 리포트 시점에 적요에서 다시 계산한다(`lib/classify/issuer.mjs`). 저장하지
+않은 데이터는 유출되지 않는다.
 
 `is_transfer` 는 **리포트에서 구분 표시하기 위한 라벨**이지 집계 제외 플래그가 아니다.
 
@@ -296,24 +318,40 @@ CREATE TABLE category_rules (
   pattern   TEXT NOT NULL,     -- 적요 정규식
   sign      SMALLINT,          -- -1 출금만 / 1 입금만 / NULL 무관
   category  TEXT NOT NULL,
-  priority  INT  NOT NULL DEFAULT 100
+  priority  INT  NOT NULL DEFAULT 100,
+  CONSTRAINT category_rules_sign_valid      CHECK (sign IS NULL OR sign IN (-1, 1)),
+  CONSTRAINT category_rules_pattern_nonempty CHECK (btrim(pattern) <> '')
 );
+
+CREATE INDEX category_rules_priority_idx ON category_rules (priority, id);
 
 CREATE TABLE merchant_map (
   description TEXT PRIMARY KEY,
   category    TEXT NOT NULL,
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT merchant_map_description_nonempty CHECK (btrim(description) <> ''),
+  CONSTRAINT merchant_map_category_nonempty    CHECK (btrim(category) <> '')
 );
 
 CREATE TABLE adjustments (
   id         BIGSERIAL PRIMARY KEY,
-  year_month TEXT   NOT NULL,
-  target     TEXT   NOT NULL,
-  amount     BIGINT NOT NULL,
-  reason     TEXT   NOT NULL,   -- 필수. 사유 없는 보정은 입력할 수 없다
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  year_month CHAR(7) NOT NULL,
+  target     TEXT    NOT NULL,
+  amount     BIGINT  NOT NULL,
+  reason     TEXT    NOT NULL,   -- 필수. 사유 없는 보정은 입력할 수 없다
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT adjustments_year_month_fmt  CHECK (year_month ~ '^[0-9]{4}-[0-9]{2}$'),
+  CONSTRAINT adjustments_reason_nonempty CHECK (btrim(reason) <> ''),
+  CONSTRAINT adjustments_amount_nonzero  CHECK (amount <> 0),
+  CONSTRAINT adjustments_target_valid
+    CHECK (target IN ('수입','저축','용돈','주거비','고정비','비상금','변동비'))
 );
+
+CREATE INDEX adjustments_year_month_idx ON adjustments (year_month);
 ```
+
+`NOT NULL` 만으로는 빈 문자열(`''` · 공백)이 통과한다. 사유 없는 보정과 빈 패턴 ·
+빈 매핑 키를 실제로 막는 것은 위 `btrim(...) <> ''` CHECK 들이다.
 
 **이자는 보정이 아니다.** `거래 유형 = 이자입금` 으로 실거래에 잡히므로 자동 반영된다.
 
@@ -355,6 +393,7 @@ txn_type='펌뱅킹출금' + /카드/ + amount<0    → 카드대금
 /IRP|ISA|연금/                               → 저축
 /코인적립/                                   → 저축
 /통장 ?이자/                                 → 이자
+/용돈/ + amount<0                            → 용돈   (priority 75)
 txn_type='자동이체'                          → 고정비 후보
 ```
 
@@ -480,7 +519,7 @@ xlsx 만 두면 집계된 형태라 복구가 안 된다. JSON 이 실제 이중
 4. **계좌 검산** — 3개 계좌 모두 0 오차인지
 5. **중복 검증** — 같은 달 두 번 수집 → 신규 저장 0건
 6. **카드 집계 검증** — 카드사별 합계가 `펌뱅킹출금` 카드 행 합계와 일치하는지
-7. **보안 검증** — 실행 로그를 grep 해서 계좌번호 · 토큰 · 비밀번호가 없는지
+7. **보안 검증** — 실행 로그를 grep 해서 계좌번호 · 토큰 · 적요가 없는지
 8. **인증 검증** — 화이트리스트 외 계정으로 로그인 시도 시 차단되는지
 
 ---
