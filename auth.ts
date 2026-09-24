@@ -12,6 +12,14 @@ import Google from "next-auth/providers/google";
 // 받으므로 Gmail 읽기 권한(restricted 스코프)이 필요 없고, Drive 백업 권한은
 // 나중에 백업 버튼을 처음 누르는 시점에 증분 동의(incremental auth)로 따로
 // 받는다. 여기에 스코프를 다시 늘리지 않는다.
+//
+// ⚠️ refresh token 은 받지 않는다(`access_type: "offline"` · `prompt: "consent"`
+//    를 두지 않는다). Phase 4 의 드라이브 백업은 **증분 동의**로 그 자리에서
+//    받은 세션의 access token 으로 수행한다 — 사용자가 백업 버튼을 누르고
+//    있는 동안에만 필요한 권한이라 오프라인 접근이 필요 없다. refresh token 은
+//    한 번 받으면 폐기 전까지 무기한 유효한 비밀값이고, 쓰임이 없는 비밀값을
+//    세션 쿠키에 넣어 두는 것은 데이터 최소화 원칙에 어긋난다.
+//    여기에 offline/consent 를 다시 넣지 말 것.
 const GOOGLE_SCOPES = ["openid", "email", "profile"].join(" ");
 
 function allowedEmails(): string[] {
@@ -36,14 +44,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     Google({
       clientId: process.env.AUTH_GOOGLE_ID,
       clientSecret: process.env.AUTH_GOOGLE_SECRET,
-      authorization: {
-        params: {
-          scope: GOOGLE_SCOPES,
-          // refresh token 을 받으려면 offline + consent 가 둘 다 필요하다.
-          access_type: "offline",
-          prompt: "consent",
-        },
-      },
+      authorization: { params: { scope: GOOGLE_SCOPES } },
     }),
   ],
   session: { strategy: "jwt" },
@@ -63,7 +64,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (account) {
         token.accessToken = account.access_token;
         token.expiresAt = account.expires_at;
-        if (account.refresh_token) token.refreshToken = account.refresh_token;
       }
       return token;
     },
