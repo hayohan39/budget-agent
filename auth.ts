@@ -8,15 +8,11 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 
-// Gmail 첨부 수집(readonly) 과 앱이 만든 파일만 접근하는 Drive(drive.file).
-// 더 넓은 스코프는 요청하지 않는다.
-const GOOGLE_SCOPES = [
-  "openid",
-  "email",
-  "profile",
-  "https://www.googleapis.com/auth/gmail.readonly",
-  "https://www.googleapis.com/auth/drive.file",
-].join(" ");
+// 로그인에는 신원 확인용 기본 스코프만 요청한다. 거래내역은 웹앱 업로드로
+// 받으므로 Gmail 읽기 권한(restricted 스코프)이 필요 없고, Drive 백업 권한은
+// 나중에 백업 버튼을 처음 누르는 시점에 증분 동의(incremental auth)로 따로
+// 받는다. 여기에 스코프를 다시 늘리지 않는다.
+const GOOGLE_SCOPES = ["openid", "email", "profile"].join(" ");
 
 function allowedEmails(): string[] {
   return (process.env.ALLOWED_EMAILS ?? "")
