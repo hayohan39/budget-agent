@@ -72,3 +72,35 @@ test('실패 사유 설명에 값이 들어가지 않는다', () => {
     assert.ok(!message.includes(raw.trim()) || raw.trim() === '', `사유 문구에 값이 샜다`);
   }
 });
+
+test('큰 지수를 자릿수 판정 전에 거른다 — 문자열을 할당하지 않는다', () => {
+  // `<v>` 원문의 지수부에는 자릿수 제한이 없다. 예전 구현은 자릿수 상한을
+  // 보기 **전에** `'0'.repeat(지수)` 로 패딩을 만들어서, `1E268000000` 하나에
+  // 268MB 를 할당했고 더 큰 지수는 RangeError 로 던져 버렸다(사유 코드를
+  // 돌려주기로 한 약속이 깨진다).
+  const before = process.memoryUsage().heapUsed;
+  for (const raw of ['1E268000000', '1E1000000000', '1E99999999999', '-9.9E2147483600']) {
+    assert.equal(reason(raw), 'unsafe', raw); // 던지지 않고 사유 코드로 돌아온다
+  }
+  const grewMb = (process.memoryUsage().heapUsed - before) / (1024 * 1024);
+  assert.ok(grewMb < 32, `힙이 ${grewMb.toFixed(1)}MB 늘었다 — 패딩을 만들고 있다`);
+
+  // 음의 큰 지수도 마찬가지다. 값이 전부 소수점 아래로 내려간다.
+  assert.equal(reason('1E-268000000'), 'fraction');
+  // 유효숫자가 없으면 지수가 아무리 커도 0 이다.
+  assert.equal(value('0E268000000'), 0);
+  assert.equal(value('0.000E-268000000'), 0);
+});
+
+test('큰 지수를 걸러도 정상 지수 표기는 그대로 읽는다', () => {
+  // 토스 명세서(Java 계열 도구)는 절댓값 1e7 이상을 지수 표기로 적는다.
+  assert.equal(value('1.2341234E7'), 12341234);
+  assert.equal(value('3.4E4'), 34000);
+  assert.equal(value('-1.5E6'), -1500000);
+  assert.equal(value('9.99999999999999E14'), 999999999999999);
+  assert.equal(value('1E14'), 100000000000000); // 15자리, 상한 바로 아래
+  assert.equal(reason('1E15'), 'unsafe'); // 16자리는 기존 자릿수 상한 밖이다.
+  // 앞의 0 은 자릿수로 세지 않는다.
+  assert.equal(value('0000000000000000001'), 1);
+  assert.equal(value('0.00000001E8'), 1);
+});
