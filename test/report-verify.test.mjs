@@ -35,6 +35,8 @@ const SEED_RULES = Object.freeze([
   { id: 7, txn_type: null, pattern: '통장 ?이자', sign: null, category: '이자', priority: 70 },
   { id: 8, txn_type: '이자입금', pattern: '.*', sign: null, category: '이자', priority: 80 },
   { id: 9, txn_type: '자동이체', pattern: '.*', sign: null, category: '고정비', priority: 90 },
+  // 20260924033721729_add-allowance-rule.sql 이 나중에 넣은 규칙. id 는 SERIAL 이라 10 이다.
+  { id: 10, txn_type: null, pattern: '용돈', sign: -1, category: '용돈', priority: 75 },
 ]);
 
 function row(overrides = {}) {

@@ -323,6 +323,8 @@ const SEED_RULES = Object.freeze([
   { id: 7, txn_type: null, pattern: '통장 ?이자', sign: null, category: '이자', priority: 70 },
   { id: 8, txn_type: '이자입금', pattern: '.*', sign: null, category: '이자', priority: 80 },
   { id: 9, txn_type: '자동이체', pattern: '.*', sign: null, category: '고정비', priority: 90 },
+  // 20260924033721729_add-allowance-rule.sql 이 나중에 넣은 규칙. id 는 SERIAL 이라 10 이다.
+  { id: 10, txn_type: null, pattern: '용돈', sign: -1, category: '용돈', priority: 75 },
 ]);
 
 function fixtureRecords() {
@@ -348,13 +350,29 @@ test('fixture 한 달치의 섹션 합계', async () => {
 
   // 수입: 34,000 + 5,900,000 + 1,045,850 + 3,500,000 + 1,000,000 + 263(이자)
   assert.equal(result.수입.total, 11480113);
-  assert.equal(result.고정지출1.total, -4150000); // 저축 3,350,000 + 주거비 800,000
-  assert.equal(result.고정지출2.total, -1000000); // 용돈 2건이 고정비 포괄 규칙에 걸린다
+  // 저축 3,350,000 + 용돈 1,000,000 + 주거비 800,000
+  assert.equal(result.고정지출1.total, -5150000);
+  assert.equal(result.고정지출2.total, 0); // 용돈 규칙이 생긴 뒤로 고정비로 새지 않는다
   assert.equal(result.변동지출.카드대금.total, -5090698);
   assert.equal(result.변동지출.기타.total, -181280); // 코웨이 · 모임원송금 2건
   assert.equal(result.계좌간이동.total, -1500000);
   assert.equal(result.미분류.count, 8);
   assert.equal(result.거래건수, 24);
+});
+
+test('용돈 2건은 고정지출1 에 들어간다(고정지출2 가 아니다)', async () => {
+  const result = report(await fixtureRows());
+
+  assert.deepEqual(result.고정지출1.items, [
+    { key: '저축', total: -3350000, count: 6 },
+    { key: '용돈', total: -1000000, count: 2 },
+    { key: '주거비', total: -800000, count: 1 },
+  ]);
+  // 용돈 규칙이 생기기 전에는 이 두 건이 자동이체 포괄 규칙에 걸려 여기 있었다.
+  assert.deepEqual(result.고정지출2.items, [
+    { key: '고정비', total: 0, count: 0 },
+    { key: '비상금', total: 0, count: 0 },
+  ]);
 });
 
 test('섹션 합계가 메인 계좌 금액 총합과 같다(항등식)', async () => {
@@ -491,6 +509,11 @@ test('저장된 한 달치로 같은 숫자가 나온다', async (t) => {
       ['삼성카드', '현대카드', 'KB국민카드'],
     );
     assert.equal(result.계좌간이동.total, -1500000);
+    // 20260924033721729_add-allowance-rule.sql 이 실제로 적용된 결과.
+    // 규칙을 손으로 복사한 상수가 아니라 마이그레이션이 넣은 행으로 분류된 값이다.
+    assert.equal(result.고정지출1.items.find((item) => item.key === '용돈').total, -1000000);
+    assert.equal(result.고정지출1.total, -5150000);
+    assert.equal(result.고정지출2.total, 0);
     assert.equal(result.미분류.count, 8);
     assert.equal(result.보정.total, -10000);
     assert.equal(result.종합정산.보정후순증감, result.종합정산.실현순증감 - 10000);

@@ -345,9 +345,11 @@ test('시드 규칙으로 fixture 24행을 실제 DB 에서 분류한다', async
       counts.rows.map((row) => [row.category, row.n]),
       [
         ['(미분류)', 8],
-        ['고정비', 2],
         ['고정비이체', 1],
         ['비상금이체', 1],
+        // 용돈 2건. 20260924033721729_add-allowance-rule.sql 이전에는 자동이체
+        // 포괄 규칙에 걸려 '고정비' 2건이었다.
+        ['용돈', 2],
         ['이자', 1],
         ['저축', 6],
         ['주거비', 1],
@@ -361,18 +363,23 @@ test('시드 규칙으로 fixture 24행을 실제 DB 에서 분류한다', async
     assert.equal(second.unmatched, 8);
 
     // 사람이 고친 매핑은 다음 실행에서도 덮이지 않는다.
+    // 두 행 다 이미 분류돼 있어야 검사가 의미를 갖는다 — 규칙이 넣은 값과
+    // 다른 분류를 merchant_map 에 넣어 두고, 그래도 덮이지 않는지 본다.
     await client.query(
-      `UPDATE transactions SET category = '용돈' WHERE description = '길동 용돈'`,
+      `UPDATE transactions SET category = '변동비' WHERE description = '길동 용돈'`,
     );
     await client.query(
-      `INSERT INTO merchant_map (description, category) VALUES ('철수 용돈', '용돈')`,
+      `INSERT INTO merchant_map (description, category) VALUES ('철수 용돈', '변동비')`,
     );
     const third = await classifyStored(client);
     assert.equal(third.classified, 0, '이미 분류된 행은 다시 쓰지 않는다');
-    const yongdon = await client.query(
-      `SELECT count(*)::int AS n FROM transactions WHERE category = '용돈'`,
+    const kept = await client.query(
+      `SELECT description, category FROM transactions WHERE description LIKE '%용돈'`,
     );
-    assert.equal(yongdon.rows[0].n, 1);
+    const byDescription = new Map(kept.rows.map((row) => [row.description, row.category]));
+    // 사람이 고친 값도, 규칙이 넣은 값도 그대로다.
+    assert.equal(byDescription.get('길동 용돈'), '변동비');
+    assert.equal(byDescription.get('철수 용돈'), '용돈');
   });
 });
 

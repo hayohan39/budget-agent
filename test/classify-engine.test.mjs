@@ -43,6 +43,8 @@ const SEED_RULES = Object.freeze([
   { id: 7, txn_type: null, pattern: '통장 ?이자', sign: null, category: '이자', priority: 70 },
   { id: 8, txn_type: '이자입금', pattern: '.*', sign: null, category: '이자', priority: 80 },
   { id: 9, txn_type: '자동이체', pattern: '.*', sign: null, category: '고정비', priority: 90 },
+  // 20260924033721729_add-allowance-rule.sql 이 나중에 넣은 규칙. id 는 SERIAL 이라 10 이다.
+  { id: 10, txn_type: null, pattern: '용돈', sign: -1, category: '용돈', priority: 75 },
 ]);
 
 function fixtureRecords() {
@@ -161,6 +163,40 @@ test('BIGINT 가 문자열로 와도 부호를 제대로 읽는다', () => {
   assert.equal(result.category, CARD_CATEGORY);
 });
 
+// ── 용돈 ───────────────────────────────────────────────────────────────────
+
+test('용돈 행은 자동이체 포괄 규칙이 아니라 용돈으로 분류된다', () => {
+  const classifier = seedClassifier();
+
+  for (const description of ['길동 용돈', '철수 용돈']) {
+    const result = classifier.classify({ description, txn_type: '자동이체', amount: -500000 });
+    assert.equal(result.category, '용돈');
+    // priority 75 규칙이 자동이체 포괄 규칙(90)보다 먼저 걸린다.
+    assert.equal(result.ruleId, 10);
+  }
+});
+
+test('용돈 규칙의 sign 가드가 +입금을 걸러 낸다', () => {
+  // 용돈은 정의상 나가는 돈이다. 적요가 같아도 입금이면 용돈 지출이 아니다.
+  const result = seedClassifier().classify({
+    description: '길동 용돈',
+    txn_type: '자동이체',
+    amount: 500000,
+  });
+  assert.notEqual(result.category, '용돈');
+});
+
+test('용돈 규칙이 더 구체적인 규칙을 가리지 않는다', () => {
+  const classifier = seedClassifier();
+  const at = (description) =>
+    classifier.classify({ description, txn_type: '자동이체', amount: -500000 }).category;
+
+  // priority 75 는 10~70 보다 뒤에 있으므로 계좌 간 이동 · 저축 판정이 그대로 이긴다.
+  assert.equal(at('비상금 계좌 용돈'), '비상금이체');
+  assert.equal(at('고정비 계좌 용돈'), '고정비이체');
+  assert.equal(at('길동 용돈 IRP'), '저축');
+});
+
 // ── 나쁜 규칙 ──────────────────────────────────────────────────────────────
 
 test('컴파일되지 않는 규칙은 건너뛰고 나머지는 계속 돈다', () => {
@@ -270,8 +306,8 @@ test('fixture 24행이 시드 규칙으로 기대한 분류를 받는다', () =>
     '저축',      // 김철수 ISA
     '저축',      // 홍길동 ISA
     '저축',      // 길동 IRP
-    '고정비',    // 길동 용돈  ← 용돈 규칙이 없어 자동이체 포괄 규칙에 걸린다
-    '고정비',    // 철수 용돈  ← 같음
+    '용돈',      // 길동 용돈  ← priority 75 규칙이 자동이체 포괄 규칙(90)보다 먼저 걸린다
+    '용돈',      // 철수 용돈  ← 같음
     '비상금이체', // 비상금 계좌
     '고정비이체', // 고정비 계좌
     null,        // 김철수 입금(휴가비)
