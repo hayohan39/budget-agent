@@ -11,7 +11,10 @@
 import { useState } from "react";
 
 const FILE_FIELD = "files";
+const PASSWORD_FIELD = "password";
 const MAX_FILE_COUNT = 3;
+/** lib/xlsx/crypto.mjs 의 MAX_PASSWORD_LENGTH 와 같은 값. 서버가 다시 막는다. */
+const MAX_PASSWORD_LENGTH = 255;
 
 /**
  * 경고 코드 -> 사람이 읽는 문장. 서버는 코드만 보낸다.
@@ -31,6 +34,9 @@ const WARNING_TEXT: Record<string, string> = {
   classificationSkipped: "분류 규칙을 읽지 못해 미분류로 저장했습니다 (거래는 저장되었습니다)",
   // 규칙 중 일부가 정규식으로 컴파일되지 않아 그 규칙만 건너뛰었다.
   rulePatternSkipped: "사용할 수 없는 분류 규칙이 있어 그 규칙만 건너뛰었습니다",
+  // 비밀번호는 맞았지만 푼 파일의 무결성 서명이 맞지 않는다. 거래는 저장됐다.
+  decryptIntegrityMismatch:
+    "암호를 푼 파일의 무결성 서명이 맞지 않습니다 (거래는 저장되었습니다)",
   // 아래 5개는 lib/classify/pattern.mjs 가 규칙을 거부할 때 쓰는 코드다.
   // 지금 업로드 응답은 이것들을 rulePatternSkipped 하나로 묶어 보내지만,
   // 규칙별 사유를 내보내는 화면이 생기면 그대로 이 표를 쓴다.
@@ -113,7 +119,7 @@ export function ImportForm() {
 
   return (
     <div className="flex flex-col gap-6">
-      <form onSubmit={onSubmit} className="flex flex-col items-start gap-4">
+      <form onSubmit={onSubmit} className="flex w-full flex-col items-start gap-4">
         <input
           type="file"
           name={FILE_FIELD}
@@ -122,6 +128,33 @@ export function ImportForm() {
           disabled={busy}
           className="text-sm file:mr-3 file:rounded-md file:border file:border-zinc-300 file:bg-transparent file:px-3 file:py-2 file:text-sm dark:file:border-zinc-700"
         />
+        <div className="flex w-full flex-col gap-1">
+          <label
+            htmlFor="statement-password"
+            className="text-sm text-zinc-700 dark:text-zinc-300"
+          >
+            파일 비밀번호 (암호가 걸린 파일일 때만)
+          </label>
+          <input
+            id="statement-password"
+            type="password"
+            name={PASSWORD_FIELD}
+            // 브라우저 비밀번호 관리자가 저장 · 자동 입력을 제안하도록 둔다.
+            // 이 값을 기억해 주는 곳은 브라우저뿐이다 — 서버는 저장하지 않는다.
+            autoComplete="current-password"
+            maxLength={MAX_PASSWORD_LENGTH}
+            disabled={busy}
+            className="w-full max-w-xs rounded-md border border-zinc-300 bg-transparent px-3 py-2 text-sm dark:border-zinc-700"
+          />
+          <p className="text-xs text-zinc-500 dark:text-zinc-500">
+            토스뱅크가 보낸 엑셀에 암호가 걸려 있으면 입력해 주세요. 세 파일 모두
+            같은 비밀번호로 풉니다.{" "}
+            <strong className="font-medium">
+              비밀번호는 서버에 저장하지 않습니다.
+            </strong>{" "}
+            올릴 때 한 번 쓰고 바로 버립니다.
+          </p>
+        </div>
         <button
           type="submit"
           disabled={busy}
