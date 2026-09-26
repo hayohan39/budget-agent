@@ -6,6 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { loadClassifier } from '../lib/classify/store.mjs';
 import { runMigrations, withScratchDatabase } from './helpers/scratch-db.mjs';
 
 const MIGRATION = '20260926055220149_merchant-map-direction.sql';
@@ -70,6 +71,11 @@ test('방향 마이그레이션: 기존 매핑이 있는 테이블에 깨끗하�
         client.query(`INSERT INTO merchant_map (description, direction, category) VALUES ('이영희', NULL, '저축')`),
       );
 
+      // 분류기가 새 컬럼을 읽는다: 방향 매핑이 any 를 이긴다.
+      const classifier = await loadClassifier(client);
+      assert.equal(classifier.classify({ description: '김철수', amount: -170000 }).category, '용돈');
+      assert.equal(classifier.classify({ description: '코인적립', amount: -1 }).category, '변동비');
+      assert.equal(classifier.classify({ description: '코인적립', amount: 1 }).category, '변동비');
     },
     { migrationsBefore: MIGRATION },
   );

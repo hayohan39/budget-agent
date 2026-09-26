@@ -78,6 +78,51 @@ test('merchant_map 키는 적요 정규화를 거친다', () => {
   assert.equal(result.category, '손수정');
 });
 
+// ── 방향(입금 · 출금) ──────────────────────────────────────────────────────
+
+test('방향이 맞는 매핑이 방향 무관(any) 매핑을 이긴다', () => {
+  const classifier = seedClassifier([
+    { description: '김철수', direction: 'any', category: '변동비', item: '옛 매핑' },
+    { description: '김철수', direction: 'out', category: '용돈', item: '철수 용돈' },
+  ]);
+  const out = classifier.classify({ description: '김철수', txn_type: '모임원송금', amount: -170000 });
+  assert.deepEqual([out.category, out.source, out.item], ['용돈', 'merchant_map', '철수 용돈']);
+  // 입금에는 방향 매핑이 없으니 any 가 건다.
+  const inflow = classifier.classify({ description: '김철수', txn_type: '입금', amount: '34000' });
+  assert.deepEqual([inflow.category, inflow.source, inflow.item], ['변동비', 'merchant_map', '옛 매핑']);
+});
+
+test('방향 구분 전의 매핑(any · direction 없음)은 양쪽 방향에 그대로 걸린다', () => {
+  for (const entry of [
+    { description: '김철수', direction: 'any', category: '수입' },
+    { description: '김철수', category: '수입' }, // direction 을 읽지 않던 호출자
+  ]) {
+    const classifier = seedClassifier([entry]);
+    assert.equal(classifier.classify({ description: '김철수', amount: 34000 }).category, '수입');
+    assert.equal(classifier.classify({ description: '김철수', amount: -170000 }).category, '수입');
+  }
+});
+
+test('한쪽 방향 매핑은 반대 방향에 걸리지 않는다(규칙 · 미분류로 간다)', () => {
+  const classifier = seedClassifier([{ description: '김철수', direction: 'in', category: '수입' }]);
+  assert.equal(classifier.classify({ description: '김철수', txn_type: '입금', amount: 3500000 }).category, '수입');
+  const out = classifier.classify({ description: '김철수', txn_type: '모임원송금', amount: -170000 });
+  assert.deepEqual([out.category, out.source], [null, null]);
+  // 금액 0 은 출금 쪽이다(현금흐름표와 같은 기준).
+  assert.equal(classifier.classify({ description: '김철수', amount: 0 }).category, null);
+
+  // 출금 매핑은 규칙보다 세지만 입금 행에서는 규칙이 그대로 돈다.
+  const coin = seedClassifier([{ description: '코인적립', direction: 'out', category: '변동비' }]);
+  assert.equal(coin.classify({ description: '코인적립', txn_type: '자동이체', amount: -1 }).category, '변동비');
+  assert.equal(coin.classify({ description: '코인적립', txn_type: '자동이체', amount: 1 }).category, '저축');
+});
+
+test('알 수 없는 방향 값의 매핑은 양쪽 어디에도 걸리지 않는다', () => {
+  const classifier = seedClassifier([{ description: '김철수', direction: 'both', category: '수입' }]);
+  assert.equal(classifier.classify({ description: '김철수', amount: 1 }).category, null);
+  assert.equal(classifier.classify({ description: '김철수', amount: -1 }).category, null);
+});
+
 test('priority 가 작은 규칙이 먼저 걸린다', () => {
   // `코인적립` 은 priority 60 이고 `자동이체` 포괄 규칙은 90 이다.
   const result = seedClassifier().classify({
