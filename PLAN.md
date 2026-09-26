@@ -345,12 +345,15 @@ CREATE TABLE category_rules (
 CREATE INDEX category_rules_priority_idx ON category_rules (priority, id);
 
 CREATE TABLE merchant_map (
-  description TEXT PRIMARY KEY,     -- 키: normalizeDescription(적요)
+  description TEXT NOT NULL,        -- 키: normalizeDescription(적요)
+  direction   TEXT NOT NULL DEFAULT 'any',  -- 2026-09 추가. in | out | any
   category    TEXT NOT NULL,
   item        TEXT,                 -- 2026-09 추가. NULL 이면 적요에서 계산
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (description, direction),  -- 2026-09: (description) 에서 바뀜
   CONSTRAINT merchant_map_description_nonempty CHECK (btrim(description) <> ''),
-  CONSTRAINT merchant_map_category_nonempty    CHECK (btrim(category) <> '')
+  CONSTRAINT merchant_map_category_nonempty    CHECK (btrim(category) <> ''),
+  CONSTRAINT merchant_map_direction_valid      CHECK (direction IN ('in', 'out', 'any'))
 );
 
 CREATE TABLE adjustments (
@@ -379,7 +382,7 @@ CREATE INDEX adjustments_year_month_idx ON adjustments (year_month);
 
 ## 분류 엔진 (LLM 없음)
 
-우선순위: `merchant_map` → `category_rules` → 미분류
+우선순위: `merchant_map`(방향이 맞는 매핑 → `any` 매핑) → `category_rules` → 미분류
 
 ### 🔴 카드대금 규칙 — 문자열 `카드대금` 은 존재하지 않는다
 
@@ -424,22 +427,40 @@ txn_type='자동이체'                          → 고정비 후보
 
 ### 사람이 고르는 분류 — `/classify` (2026-09)
 
-- **키는 정규화한 적요 하나다**(`normalizeDescription`). `merchant_map.description`
-  이 그 키이고, 분류기가 매핑을 찾을 때 · `/classify` 가 행을 묶을 때 · 매핑을 저장할
-  때 모두 같은 함수를 쓴다. 업로드 경로가 적요를 저장 전에 같은 함수로 정규화하므로
-  저장된 `transactions.description` 이 곧 키다
+- **묶음은 (정규화한 적요, 방향)이다.** 적요 부분은 `normalizeDescription` 이고
+  `merchant_map.description` 이 그 키다. 분류기가 매핑을 찾을 때 · `/classify` 가 행을
+  묶을 때 · 매핑을 저장할 때 모두 같은 함수를 쓴다. 업로드 경로가 적요를 저장 전에 같은
+  함수로 정규화하므로 저장된 `transactions.description` 이 곧 키다
+- **방향 규칙 (2026-09)** — 같은 적요라도 입금과 출금은 용도가 다르다("적요 하나에
+  입금/출금 구분되는 경우에는 구분을 해야해 … 합계산하지 말고 항목별로"). 방향은
+  `lib/classify/direction.mjs` 의 `directionOf` 하나로 정한다: 금액 > 0 이면 `in`,
+  나머지(0 포함)는 `out` — 현금흐름표가 입금을 `amount > 0` 으로 가르는 것과 같다.
+  - `/classify` 는 같은 적요의 입금과 출금을 **두 묶음**으로 보여 주고 따로 분류한다
+  - `merchant_map.direction` 은 `in` · `out` · `any`. `any` 는 방향 구분 전에 저장된
+    매핑이다(마이그레이션 `20260926055220149_merchant-map-direction` 이 열 기본값으로
+    채운다). 화면에서 새로 만들 수 없다 — 묶음 쓰기는 `in` · `out` 만 받는다
+  - 조회 순서: (적요, 그 행의 방향) → (적요, `any`) → 규칙 → 미분류
+  - `any` 매핑은 같은 적요의 방향 매핑이 **없는 방향만** 다스린다. 그래서 `any` 를
+    고치거나 지워도 방향 매핑이 분류한 행은 그대로이고, 방향 매핑을 지우면 그 방향의
+    `'map'` 행은 `any`(있으면) → 규칙 → 미분류 순으로 다시 분류된다
 - 분류 선택지는 `lib/report/monthly.mjs` 의 `CLASSIFY_CATEGORIES` **하나**에서 나온다
   (수입 · 이자 · 저축 · 용돈 · 주거비 · 고정비 · 비상금 · 카드대금 · 변동비 ·
-  고정비이체 · 비상금이체). 집계가 칸을 가진 분류 전부이고, 쓰기 API 도 이 목록 밖은
-  거부한다. **정규식 편집기는 없다** — 사람은 패턴을 쓰지 않는다
-- **이번만** — 그 달 그 묶음의 행만 바꾸고 `category_source = 'manual'`.
+  고정비이체 · 비상금이체 · 기타). 집계가 칸을 가진 분류 전부이고, 쓰기 API 도 이 목록
+  밖은 거부한다. **정규식 편집기는 없다** — 사람은 패턴을 쓰지 않는다
+- **기타 (2026-09)** — 굳이 나눌 필요가 없는 적요를 담는 분류. 출금은 변동지출의 카드
+  아닌 부분에 `기타` 라는 **자기 줄**로(미분류 · 변동비 줄과 섞지 않는다), 입금은 수입
+  섹션의 `기타` 줄로 간다. 분류가 있는 행이라 **미분류로 세지 않는다**. 묶음마다
+  "기타로 처리" 버튼이 있고 고른 범위(이번만 · 앞으로도)를 따른다
+- **이번만** — 그 달 그 묶음(적요 + 방향)의 행만 바꾸고 `category_source = 'manual'`.
   이후의 매핑 · 규칙 실행은 manual 행을 덮지 않는다
-- **앞으로도** — `merchant_map` 에 (키 → 분류, 항목) upsert. 그 달 그 묶음의 행과,
-  다른 달의 같은 키 행 중 출처가 NULL · rule · map 인 행을 바꾸고 `'map'` 으로 둔다.
-  다른 달의 manual 행은 건드리지 않는다. 다음 업로드는 매핑이 규칙보다 먼저라 자동으로 따른다
-- **매핑 삭제** — 그 매핑이 채운 행(`'map'`)만 규칙 엔진으로 다시 분류한다
+- **앞으로도** — `merchant_map` 에 ((키, 묶음의 방향) → 분류, 항목) upsert. 그 달 그
+  묶음의 행과, 다른 달의 같은 키 · **같은 방향** 행 중 출처가 NULL · rule · map 인 행을
+  바꾸고 `'map'` 으로 둔다. 반대 방향의 행과 다른 달의 manual 행은 건드리지 않는다.
+  다음 업로드는 매핑이 규칙보다 먼저라 자동으로 따른다
+- **매핑 수정 · 삭제** — (키, 방향) 한 행만 가리키고, 그 매핑이 다스리는 방향의 행에만
+  닿는다(위 `any` 규칙). 삭제는 그 방향의 `'map'` 행만 분류기로 다시 분류한다
 - 서버는 클라이언트가 보낸 행 id · 건수 · 금액을 받지 않는다. 그 달의 행을 직접 다시
-  읽어 키가 실제로 있을 때만 쓴다
+  읽어 (키, 방향) 묶음이 실제로 있을 때만 쓴다. 방향도 저장된 금액에서 다시 계산한다
 
 ### 항목 (2026-09)
 
@@ -448,6 +469,10 @@ txn_type='자동이체'                          → 고정비 후보
 지금은 없음) → ③ 카드대금이면 카드사 → ④ 정규화한 적요 그대로, 순서로 정한다
 (`lib/classify/item.mjs`). 그래서 규칙을 하나도 쓰지 않아도 서로 다른 적요는 서로 다른
 줄이 된다. 항목 줄의 합은 섹션 합계와 같고, 실현순증감 · 검산은 바뀌지 않는다.
+
+항목 줄의 키는 **(분류, 항목, 방향)** 이다(2026-09). 같은 항목의 입금과 출금은 서로 다른
+줄이라 한 줄 안에서 부호가 섞이지 않는다. 화면은 표의 기본 방향과 다른 줄(예: 수입 표의
+출금 줄)에 입금/출금 꼬리표를 붙인다.
 
 메인 계좌의 **출금**에 `수입` · `이자` 분류가 붙으면(사람이 고른 경우) 변동비가 아니라
 수입 섹션의 음수 줄로 간다. 사람이 "수입" 이라고 고른 돈이 변동비로 새지 않게 하려는
