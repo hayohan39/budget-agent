@@ -319,7 +319,7 @@ test('이번만: 그 달 그 묶음만 manual 로 바꾸고 매핑은 만들지 
     const report = await buildMonthlyReport(client, '2026-08');
     assert.deepEqual(
       report.항목별.고정지출2.find((line) => line.item === '정수기'),
-      { category: '고정비', item: '정수기', total: -3780, count: 1 },
+      { category: '고정비', item: '정수기', direction: 'out', total: -3780, count: 1 },
     );
     assert.equal(report.미분류.count, 7);
     assert.equal(verifyMonthlyReport(report).ok, true);
