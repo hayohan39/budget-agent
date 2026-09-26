@@ -892,6 +892,93 @@ test('동시 쓰기: any 수정 도중 끼어든 같은 키의 방향 매핑이 
   });
 });
 
+test('동시 쓰기: stripMonth 앞으로도는 지운 키로 잠가야 같은 키의 매핑 수정과 줄 선다', async (t) => {
+  await withScratchDatabase(t, 'classify_race_stripmonth', async (client, url) => {
+    // 예전에(월 토큰이 붙기 전) 만들어진 (코웨이렌탈, any) 매핑과, 그 매핑이
+    // 이미 다스리고 있는(출처 'map') 지운 형태 그대로의 적요 행 하나.
+    await client.query(
+      `INSERT INTO merchant_map (description, direction, category, item) VALUES ('코웨이렌탈', 'any', '고정비', NULL)`,
+    );
+    await insertTransactions(client, [
+      extraRecord(1, {
+        description: '코웨이렌탈',
+        txn_type: 'CMS출금',
+        amount: -3780,
+        category: '고정비',
+        category_source: 'map',
+        year_month: '2026-08',
+        dedupe_key: 'test-race-stripmonth-existing',
+      }),
+      extraRecord(2, {
+        description: '코웨이09월렌탈',
+        txn_type: 'CMS출금',
+        amount: -3780,
+        year_month: '2026-09',
+        dedupe_key: 'test-race-stripmonth-new',
+      }),
+    ]);
+
+    const { default: pg } = await import('pg');
+    const second = new pg.Client({ connectionString: url });
+    second.on('error', () => {});
+    await second.connect();
+    t.after(() => second.end().catch(() => {}));
+    const secondPid = (await second.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+
+    const firstConn = new pg.Client({ connectionString: url });
+    firstConn.on('error', () => {});
+    await firstConn.connect();
+    t.after(() => firstConn.end().catch(() => {}));
+
+    // T1: (코웨이렌탈, any) 매핑 수정. governedDirections 를 읽은(이 시점엔 방향
+    // 매핑이 없어 [in, out] 둘 다) 뒤, 첫 UPDATE transactions 직전에 멈춘다.
+    const gated = pauseBefore(firstConn, 'UPDATE transactions');
+    const edit = updateMapping(gated.client, { key: '코웨이렌탈', direction: 'any', category: '변동비', item: null });
+    await gated.paused;
+
+    // T2: 09월 적요를 stripMonth 로 "앞으로도" 저장 — 실제 쓰기 대상(merchant_map
+    // 행 · 다른 달 재반영 조건)은 원래 키가 아니라 지운 키 '코웨이렌탈' 이다.
+    // 잠금 키가 그와 같아야(이 커밋의 수정) T1 뒤에 줄 선다 — 다르면(수정 전)
+    // T1 이 멈춘 동안 그대로 끝까지 돈다.
+    const always = applyClassification(
+      second,
+      valid({
+        scope: 'always',
+        month: '2026-09',
+        key: '코웨이09월렌탈',
+        direction: 'out',
+        category: '고정비',
+        item: '정수기',
+        stripMonth: true,
+      }),
+    );
+    await settledOrWaitingOnLock(client, secondPid, always);
+
+    gated.release();
+    const [editOutcome, alwaysOutcome] = await Promise.all([edit, always]);
+    assert.equal(editOutcome.ok, true);
+    assert.equal(alwaysOutcome.ok, true);
+
+    // 지운 키(코웨이렌탈, out)를 실제로 다스리는 매핑을 계산한다 — 방향 매핑이
+    // 있으면 그것, 없으면 any(다스리는 방향 규칙, 파일 머리말 주석).
+    const maps = await mapRows(client);
+    const specificOut = maps.find(([desc, dir]) => desc === '코웨이렌탈' && dir === 'out');
+    const anyMap = maps.find(([desc, dir]) => desc === '코웨이렌탈' && dir === 'any');
+    const governingCategory = specificOut ? specificOut[2] : anyMap[2];
+
+    // 원래부터 있던 '코웨이렌탈' 행(2026-08, out)은 그 지운 키를 다스리는 매핑과
+    // 늘 일치해야 한다 — 영구히 어긋난 채로 남으면(잠금 키가 갈라졌을 때처럼)
+    // 이 assert 가 잡는다. 재분류도 이 행을 훑지 않는다(이미 category 가 있다).
+    const [existingRow] = await rowsOf(client, '코웨이렌탈');
+    assert.ok(existingRow, '기존 코웨이렌탈 행이 있어야 검사가 의미 있다');
+    assert.equal(
+      existingRow[1],
+      governingCategory,
+      '기존 코웨이렌탈 행의 category 가 그 키를 실제로 다스리는 매핑과 어긋난다',
+    );
+  });
+});
+
 // ── 기타 ───────────────────────────────────────────────────────────────────
 
 test('기타로 고른 묶음은 분류된 것이다 — 미분류만 보기와 미분류 건수에서 빠진다', () => {
