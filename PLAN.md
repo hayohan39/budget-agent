@@ -68,6 +68,23 @@
   스키마의 `cp_acct_hash` 설명 참고)
 - API 원본 응답을 그대로 보관하는 컬럼을 만들지 않는다
 
+#### 적요 표시 원칙 변경 (2026-09)
+
+지금까지 UI 는 **적요를 한 번도 보여 주지 않았다**(리포트는 분류 합계와 미분류
+건수만). 사용자가 월별 현금흐름표에서 "저축 · 용돈 · 고정비가 한 번에 퉁쳐져
+있다, 미분류를 스스로 골라 분류할 수 있어야 한다"고 요청했고, 무엇인지 보이지
+않으면 고를 수 없으므로 이 원칙을 아래 범위로 바꾼다.
+
+- **보여 주는 곳은 두 군데뿐이다.** `/classify`(적요별 **묶음** — 건수 · 합계 ·
+  현재 분류만, 행 단위 · 거래 일시 · 잔액 · 메모는 없음)와 `/report` 의 **항목 줄
+  이름**(사람이 항목 이름을 정하지 않았으면 정규화한 적요 그대로. 카드대금은 카드사)
+- 두 화면 모두 서버 컴포넌트이고, 세션 + `ALLOWED_EMAILS` 를 **요청마다 다시** 보며,
+  동적으로만 렌더된다(`/classify` 는 `force-dynamic`, 응답은 `no-store`)
+- **로그 · 에러 메시지 · API 에러 본문에는 여전히 싣지 않는다.** 쓰기 API
+  (`/api/classify*`)는 받은 키(적요)를 응답에 되비추지 않고 고정 문장과 건수만 돌려준다
+- 새로 저장하는 값(`transactions.item` · `merchant_map.item`)은 이미 저장된 적요이거나
+  사용자가 붙인 짧은 이름이다. 새로운 종류의 개인정보를 들이지 않는다
+
 ### 4. 비밀값
 
 - `DATABASE_URL` 은 서버 사이드 전용. 클라이언트 번들에 노출 금지
@@ -261,6 +278,8 @@ CREATE TABLE transactions (
   balance       BIGINT,            -- 거래 후 잔액
   memo          TEXT,
   category      TEXT,
+  category_source TEXT,            -- 'rule' | 'map' | 'manual'. NULL 은 rule 로 본다 (2026-09 추가)
+  item          TEXT,              -- 사람이 고른 항목 이름. NULL 이면 적요에서 계산 (2026-09 추가)
   is_transfer   BOOLEAN NOT NULL DEFAULT FALSE,  -- 내 계좌 간 이동 표시 (집계에서 빼지 않음)
   dedupe_key    TEXT   NOT NULL UNIQUE,
   year_month    CHAR(7) NOT NULL,
@@ -326,8 +345,9 @@ CREATE TABLE category_rules (
 CREATE INDEX category_rules_priority_idx ON category_rules (priority, id);
 
 CREATE TABLE merchant_map (
-  description TEXT PRIMARY KEY,
+  description TEXT PRIMARY KEY,     -- 키: normalizeDescription(적요)
   category    TEXT NOT NULL,
+  item        TEXT,                 -- 2026-09 추가. NULL 이면 적요에서 계산
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT merchant_map_description_nonempty CHECK (btrim(description) <> ''),
   CONSTRAINT merchant_map_category_nonempty    CHECK (btrim(category) <> '')
@@ -402,6 +422,37 @@ txn_type='자동이체'                          → 고정비 후보
 
 미분류 건은 사람이 한 번 고치면 `merchant_map` 에 저장되어 다음 달부터 자동 분류된다.
 
+### 사람이 고르는 분류 — `/classify` (2026-09)
+
+- **키는 정규화한 적요 하나다**(`normalizeDescription`). `merchant_map.description`
+  이 그 키이고, 분류기가 매핑을 찾을 때 · `/classify` 가 행을 묶을 때 · 매핑을 저장할
+  때 모두 같은 함수를 쓴다. 업로드 경로가 적요를 저장 전에 같은 함수로 정규화하므로
+  저장된 `transactions.description` 이 곧 키다
+- 분류 선택지는 `lib/report/monthly.mjs` 의 `CLASSIFY_CATEGORIES` **하나**에서 나온다
+  (수입 · 이자 · 저축 · 용돈 · 주거비 · 고정비 · 비상금 · 카드대금 · 변동비 ·
+  고정비이체 · 비상금이체). 집계가 칸을 가진 분류 전부이고, 쓰기 API 도 이 목록 밖은
+  거부한다. **정규식 편집기는 없다** — 사람은 패턴을 쓰지 않는다
+- **이번만** — 그 달 그 묶음의 행만 바꾸고 `category_source = 'manual'`.
+  이후의 매핑 · 규칙 실행은 manual 행을 덮지 않는다
+- **앞으로도** — `merchant_map` 에 (키 → 분류, 항목) upsert. 그 달 그 묶음의 행과,
+  다른 달의 같은 키 행 중 출처가 NULL · rule · map 인 행을 바꾸고 `'map'` 으로 둔다.
+  다른 달의 manual 행은 건드리지 않는다. 다음 업로드는 매핑이 규칙보다 먼저라 자동으로 따른다
+- **매핑 삭제** — 그 매핑이 채운 행(`'map'`)만 규칙 엔진으로 다시 분류한다
+- 서버는 클라이언트가 보낸 행 id · 건수 · 금액을 받지 않는다. 그 달의 행을 직접 다시
+  읽어 키가 실제로 있을 때만 쓴다
+
+### 항목 (2026-09)
+
+현금흐름표의 각 섹션은 분류 아래 **항목 줄**을 갖는다(저축 → ISA · IRP …).
+항목 이름은 ① 행에 저장된 `item`(이번만 · 앞으로도로 고른 값) → ② (규칙이 주는 항목 —
+지금은 없음) → ③ 카드대금이면 카드사 → ④ 정규화한 적요 그대로, 순서로 정한다
+(`lib/classify/item.mjs`). 그래서 규칙을 하나도 쓰지 않아도 서로 다른 적요는 서로 다른
+줄이 된다. 항목 줄의 합은 섹션 합계와 같고, 실현순증감 · 검산은 바뀌지 않는다.
+
+메인 계좌의 **출금**에 `수입` · `이자` 분류가 붙으면(사람이 고른 경우) 변동비가 아니라
+수입 섹션의 음수 줄로 간다. 사람이 "수입" 이라고 고른 돈이 변동비로 새지 않게 하려는
+것이고, 섹션 사이의 이동이라 실현순증감 · 검산은 그대로다.
+
 ---
 
 ## 검산
@@ -432,7 +483,7 @@ txn_type='자동이체'                          → 고정비 후보
 - **계좌 블록** — 고정비 · 비상금 각각 입금 / 집행 / 이자 / 잔액
 - **추이** — 수입 · 변동비 월별 라인, 3개월 평균선
 - **지표** — 고정 지출 커버율, 변동비 여유
-- **액션** — 미분류 건 드롭다운 수정, 보정 입력 폼
+- **액션** — 미분류 건 드롭다운 수정(`/classify`, 구현됨), 보정 입력 폼
 
 React 는 인터랙션이 필요한 곳(미분류 수정 · 보정 폼 · 차트)에만 쓰고, 나머지는 서버
 컴포넌트로 렌더링한다.
