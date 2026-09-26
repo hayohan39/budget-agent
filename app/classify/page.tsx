@@ -174,11 +174,12 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
         <>
           <Picker months={loaded.months} selected={loaded.month} filter={filter} />
           <p className="text-xs text-zinc-500">
-            같은 적요끼리 묶어 보여 줍니다. <strong>이번만</strong>은 이 달의 이 묶음에만
+            같은 적요끼리 묶어 보여 주고, 같은 적요라도 <strong>입금과 출금은 따로</strong>{" "}
+            묶습니다(용도가 다르기 때문입니다). <strong>이번만</strong>은 이 달의 이 묶음에만
             적용하고, 나중에 매핑이나 규칙이 다시 돌아도 바뀌지 않습니다.{" "}
             <strong>앞으로도</strong>는 매핑으로 저장해 다른 달의 같은 적요와 앞으로
-            올릴 거래에도 적용합니다(‘이번만’으로 고른 다른 달의 거래는 건드리지
-            않습니다). 항목 이름은 {ITEM_MAX_LENGTH}자까지이며, 비워 두면 적요를 그대로
+            올릴 거래 중 <strong>같은 방향</strong>의 거래에 적용합니다(반대 방향의 거래와
+            ‘이번만’으로 고른 다른 달의 거래는 건드리지 않습니다). 항목 이름은 {ITEM_MAX_LENGTH}자까지이며, 비워 두면 적요를 그대로
             씁니다.
           </p>
           {loaded.groups.length === 0 ? (
@@ -190,7 +191,7 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
           ) : (
             <ul className="flex flex-col gap-3">
               {loaded.groups.map((group) => (
-                <li key={group.key}>
+                <li key={`${group.direction}\u001f${group.key}`}>
                   <GroupForm month={loaded.month as string} group={group} categories={categories} />
                 </li>
               ))}
@@ -206,15 +207,17 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
         <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">저장된 매핑</h2>
         <p className="text-xs text-zinc-500">
           ‘앞으로도’로 저장한 것들입니다. 새로 올리는 거래는 규칙보다 이 매핑을 먼저
-          봅니다. 지우면 이 매핑으로 분류된 거래는 규칙으로 다시 분류됩니다(‘이번만’으로
-          고른 거래는 그대로).
+          봅니다. 입금 · 출금 매핑이 따로 있고, ‘방향 무관’은 입금 · 출금을 나누기 전에
+          저장한 매핑으로 같은 방향의 매핑이 없는 쪽에만 걸립니다. 지우면 이 매핑으로
+          분류된 그 방향의 거래가 다시 분류됩니다(방향 무관 매핑이 있으면 그것으로, 없으면
+          규칙으로. ‘이번만’으로 고른 거래는 그대로).
         </p>
         {loaded.mappings.length === 0 ? (
           <p className="text-sm text-zinc-600 dark:text-zinc-400">저장된 매핑이 없습니다.</p>
         ) : (
           <ul className="flex flex-col gap-2">
             {loaded.mappings.map((mapping) => (
-              <li key={mapping.key}>
+              <li key={`${mapping.direction}\u001f${mapping.key}`}>
                 <MappingRow mapping={mapping} categories={categories} />
               </li>
             ))}
