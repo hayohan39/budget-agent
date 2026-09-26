@@ -700,7 +700,16 @@ export function ImportForm() {
                     </p>
                     {result.outcome.data.unclassified > 0 ? (
                       <p className="text-amber-700 dark:text-amber-400">
-                        이 파일에 미분류 거래가 {result.outcome.data.unclassified}건 있습니다.
+                        이 파일에 미분류 거래가 {result.outcome.data.unclassified}건 있습니다.{" "}
+                        {monthsOf(result.outcome.data.period).map((month) => (
+                          <Link
+                            key={month}
+                            href={`/classify?month=${month}`}
+                            className="mr-2 underline underline-offset-4"
+                          >
+                            {month} 분류 정리
+                          </Link>
+                        ))}
                       </p>
                     ) : null}
                     <Warnings codes={result.outcome.data.warnings} />

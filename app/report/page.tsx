@@ -14,8 +14,9 @@
 //     형식이 틀리면 **받은 값을 되비추지 않고** 거부한다.
 //   - console 호출이 이 파일에 없다. 에러는 바인딩 없는 `catch {}` 로 받는다 —
 //     pg 메시지에는 호스트명과 값이 섞여 나온다.
-//   - 화면에 나가는 것은 집계뿐이다. 행 단위 내역 · 적요 · 계좌번호는 없고
-//     미분류는 건수다.
+//   - 화면에 나가는 것은 집계뿐이다. 행 단위 내역 · 거래 일시 · 계좌번호는 없다.
+//     단, 항목 줄의 이름은 사람이 정하지 않았으면 **정규화한 적요**다(사용자가
+//     요청한 변경. PLAN.md "적요 표시 원칙 변경"). 미분류는 건수와 /classify 링크.
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -32,7 +33,7 @@ export const runtime = "nodejs";
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 p-8">
+    <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 p-8">
       <div className="flex items-baseline justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">월별 현금흐름표</h1>
         <Link

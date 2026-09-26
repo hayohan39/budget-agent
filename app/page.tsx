@@ -24,6 +24,12 @@ export default async function Home() {
         >
           월별 현금흐름표
         </Link>
+        <Link
+          href="/classify"
+          className="rounded-md border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
+        >
+          분류 정리
+        </Link>
       </div>
       <form
         action={async () => {
