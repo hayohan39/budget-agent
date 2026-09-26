@@ -356,7 +356,8 @@ export function MappingRow({ mapping, categories }: { mapping: Mapping; categori
       }
       setStatus({
         kind: "done",
-        text: `지웠습니다 · 규칙으로 ${String(data.reclassified ?? 0)}건, 미분류 ${String(data.unclassified ?? 0)}건.`,
+        // 방향 매핑을 지우면 같은 적요의 방향 무관 매핑으로 돌아갈 수도 있어 '규칙으로' 라고 하지 않는다.
+        text: `지웠습니다 · 다시 분류 ${String(data.reclassified ?? 0)}건, 미분류 ${String(data.unclassified ?? 0)}건.`,
       });
       router.refresh();
     } catch {
