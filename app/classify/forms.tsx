@@ -161,6 +161,7 @@ export function GroupForm({
   );
   const [item, setItem] = useState(!group.mixedItem && group.item !== null ? group.item : group.key);
   const [scope, setScope] = useState<"once" | "always">("once");
+  const [stripMonth, setStripMonth] = useState(false);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
 
   // id 에 적요를 넣지 않는다(DOM id 에 한글·공백이 섞이면 label 연결이 깨진다).
@@ -180,6 +181,8 @@ export function GroupForm({
         direction: group.direction,
         category: chosen,
         item,
+        // '이번만'에서는 뜻이 없다(JSON.stringify 가 undefined 키를 뺀다).
+        stripMonth: scope === "always" ? stripMonth : undefined,
       });
       if (!ok) {
         setStatus({ kind: "error", text: failureText(data) });
@@ -276,6 +279,16 @@ export function GroupForm({
             앞으로도
           </label>
         </fieldset>
+        {scope === "always" ? (
+          <label className="flex items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+            <input
+              type="checkbox"
+              checked={stripMonth}
+              onChange={(event) => setStripMonth(event.target.checked)}
+            />
+            월마다 문구가 바뀌는 항목이에요 (예: OO월렌탈) — 앞으로 자동 적용
+          </label>
+        ) : null}
         <button type="submit" className={BUTTON} disabled={status.kind === "busy"}>
           {status.kind === "busy" ? "저장 중…" : "적용"}
         </button>

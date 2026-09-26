@@ -384,6 +384,61 @@ test('classifyRecords 가 레코드에 분류를 채우고 재실행해도 같�
   assert.deepEqual(records.map((record) => record.category), snapshot);
 });
 
+// ── 월 토큰 폴백(2026-09) ────────────────────────────────────────────────
+//
+// 사용자 문제: "코웨이08월렌탈의 경우 월별로 코웨이09월렌탈, 코웨이10월렌탈
+// 바뀌게 되는 고정비야." — 월 토큰을 지운 키로 저장한 매핑이 원문이 다른
+// 달의 적요에도 걸리는지 본다(lib/classify/month-pattern.mjs).
+
+test('월 토큰을 지운 키의 매핑이 다른 달의(원문이 다른) 같은 고정비를 잡는다', () => {
+  const classifier = seedClassifier([{ description: '코웨이렌탈', category: '고정비', item: '정수기' }]);
+
+  for (const description of ['코웨이08월렌탈', '코웨이09월렌탈', '코웨이10월렌탈', '코웨이9월렌탈']) {
+    const result = classifier.classify({ description, txn_type: 'CMS출금', amount: -3780 });
+    assert.deepEqual(
+      [result.category, result.source, result.item],
+      ['고정비', 'merchant_map', '정수기'],
+      description,
+    );
+  }
+});
+
+test('정확한 키의 매핑이 월 토큰을 지운 키의 매핑보다 늘 이긴다', () => {
+  // 두 매핑이 동시에 있을 때: 원문 그대로의 키(코웨이08월렌탈)가 지운 키
+  // (코웨이렌탈)보다 먼저 걸려야 한다 — 1번이 못 찾았을 때만 1-b 로 간다.
+  const classifier = seedClassifier([
+    { description: '코웨이렌탈', category: '변동비', item: '지운키매핑' },
+    { description: '코웨이08월렌탈', category: '고정비', item: '정확한키매핑' },
+  ]);
+
+  const exact = classifier.classify({ description: '코웨이08월렌탈', txn_type: 'CMS출금', amount: -3780 });
+  assert.deepEqual([exact.category, exact.item], ['고정비', '정확한키매핑']);
+
+  // 원문이 다른 달(09월)은 정확한 키가 없으니 지운 키로 떨어진다.
+  const fallback = classifier.classify({ description: '코웨이09월렌탈', txn_type: 'CMS출금', amount: -3780 });
+  assert.deepEqual([fallback.category, fallback.item], ['변동비', '지운키매핑']);
+});
+
+test('월 토큰을 지운 키의 매핑도 방향별로 걸린다(방향 -> any 순서는 그대로다)', () => {
+  const classifier = seedClassifier([
+    { description: '코웨이렌탈', direction: 'any', category: '변동비', item: 'any매핑' },
+    { description: '코웨이렌탈', direction: 'out', category: '고정비', item: '출금매핑' },
+  ]);
+  const out = classifier.classify({ description: '코웨이09월렌탈', amount: -3780 });
+  assert.deepEqual([out.category, out.item], ['고정비', '출금매핑']);
+  const inflow = classifier.classify({ description: '코웨이09월렌탈', amount: 3780 });
+  assert.deepEqual([inflow.category, inflow.item], ['변동비', 'any매핑']);
+});
+
+test('월 토큰이 없는 적요는 폴백을 타지 않는다 — 지운 키가 null 이면 추가 조회가 없다', () => {
+  // '월세' 는 stripMonthToken 이 null 을 주므로, 폴백 조회 자체가 스킵된다.
+  // '월세'라는 지운 키로 저장된 매핑이 있어도 걸리면 안 된다(있을 수도 없는 키다).
+  const classifier = seedClassifier([{ description: '월세', category: '고정비' }]);
+  const result = classifier.classify({ description: '아파트 월세', amount: -500000 });
+  // '아파트 월세' 는 정규화해도 '월세'와 다른 키라 애초에 정확한 매핑도 안 걸린다.
+  assert.equal(result.category, null);
+});
+
 test('사람이 고친 매핑을 넣으면 미분류가 줄어든다', () => {
   const records = fixtureRecords();
   const classifier = seedClassifier([
