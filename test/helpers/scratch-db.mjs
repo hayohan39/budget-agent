@@ -8,8 +8,10 @@
 //     실제 러너로 깨끗하게 적용되는지가 여기서 함께 검사된다.
 import assert from 'node:assert/strict';
 import process from 'node:process';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { copyFile, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -34,11 +36,19 @@ function localAdminUrl() {
   return url;
 }
 
-/** scripts/migrate.mjs 를 그 DB 에 대해 실행한다. 표준 출력은 버린다. */
-export function runMigrations(databaseUrl) {
+/**
+ * scripts/migrate.mjs 를 그 DB 에 대해 실행한다. 표준 출력은 버린다.
+ *
+ * 러너는 `cwd/migrations` 를 읽는다. `cwd` 를 주면 그 디렉터리의 마이그레이션만
+ * 적용한다(아래 `migrationsBefore`).
+ *
+ * @param {string} databaseUrl
+ * @param {{ cwd?: string }} [options]
+ */
+export function runMigrations(databaseUrl, { cwd = REPO_ROOT } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [path.join(REPO_ROOT, 'scripts', 'migrate.mjs')], {
-      cwd: REPO_ROOT,
+      cwd,
       env: { ...process.env, DATABASE_URL: databaseUrl },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -56,13 +66,38 @@ export function runMigrations(databaseUrl) {
 }
 
 /**
+ * 파일명이 `before` 보다 앞선 마이그레이션만 임시 디렉터리에 복사한다.
+ * 새 마이그레이션이 **이미 행이 있는 테이블**에 깨끗하게 적용되는지 보려고 쓴다.
+ * 복사본은 내용이 같아 체크섬도 같다 — 나중에 저장소의 러너를 돌리면 나머지만 적용된다.
+ *
+ * @param {import('node:test').TestContext} t
+ * @param {string} before 이 파일과 그 뒤의 파일은 복사하지 않는다
+ * @returns {Promise<string>} 러너의 cwd 로 쓸 디렉터리
+ */
+async function migrationsBeforeDir(t, before) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'budget-migrations-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = path.join(REPO_ROOT, 'migrations');
+  const target = path.join(root, 'migrations');
+  await mkdir(target);
+  const files = (await readdir(source)).filter((file) => file.endsWith('.sql') && file < before);
+  assert.ok(files.length > 0, '복사할 마이그레이션이 없다');
+  for (const file of files) await copyFile(path.join(source, file), path.join(target, file));
+  return root;
+}
+
+/**
  * 스크래치 DB 를 만들고 마이그레이션 + 계좌 3개까지 넣은 연결로 `run` 을 부른다.
+ *
+ * `migrationsBefore` 를 주면 그 파일 **앞까지만** 적용한 상태로 부른다. 나머지는
+ * `run` 안에서 `runMigrations(url)` 로 적용한다.
  *
  * @param {import('node:test').TestContext} t
  * @param {string} name 영소문자 · 숫자 · 밑줄
  * @param {(client: import('pg').Client, url: string) => Promise<void>} run
+ * @param {{ migrationsBefore?: string }} [options]
  */
-export async function withScratchDatabase(t, name, run) {
+export async function withScratchDatabase(t, name, run, { migrationsBefore } = {}) {
   const admin = localAdminUrl();
   if (admin === null) {
     t.skip('TEST_DATABASE_URL 이 없어 실제 왕복은 확인하지 않는다(로컬 Postgres 필요).');
@@ -91,7 +126,8 @@ export async function withScratchDatabase(t, name, run) {
     await cleanup.end();
   });
 
-  await runMigrations(scratchUrl.href);
+  if (migrationsBefore === undefined) await runMigrations(scratchUrl.href);
+  else await runMigrations(scratchUrl.href, { cwd: await migrationsBeforeDir(t, migrationsBefore) });
 
   const client = new pg.Client({ connectionString: scratchUrl.href });
   client.on('error', () => {});
