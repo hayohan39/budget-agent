@@ -26,10 +26,16 @@
 //
 // ── 여기에 없는 것 ────────────────────────────────────────────────────────
 //
-// 행 단위 내역이 없다. 적요 · 거래 일시 · 계좌번호 · 뒤 4자리는 이 파일이
-// 받는 데이터에 애초에 들어 있지 않고, 미분류는 **건수**로만 나온다.
-// 원본의 `선용 월급` · `지현 ISA` 같은 **항목 단위** 줄도 없다 — 집계가
-// 분류 단위까지만 내려간다. 없는 줄을 지어내지 않고 빈 채로 둔다.
+// 행 단위 내역이 없다. 거래 일시 · 잔액 · 메모 · 계좌번호 · 뒤 4자리는 이
+// 파일이 받는 데이터에 애초에 들어 있지 않다.
+//
+// 원본의 `선용 월급` · `지현 ISA` 같은 **항목 줄**은 집계의 `항목별` ·
+// `계좌블록[].항목` 에서 온다. 사람이 /classify 에서 항목 이름을 정하지 않았으면
+// 정규화한 **적요 그대로**가 항목 이름이다(카드대금은 카드사). 즉 이 화면에
+// 적요가 나온다 — 사용자가 요청한 변경이다(PLAN.md "적요 표시 원칙 변경").
+// 로그인 + 화이트리스트 뒤의 동적 페이지에만 그려진다.
+import Link from "next/link";
+
 import type { aggregateMonthly } from "@/lib/report/monthly.mjs";
 import type { verifyMonthlyReport } from "@/lib/report/verify.mjs";
 
@@ -43,7 +49,20 @@ export type Verification = ReturnType<typeof verifyMonthlyReport>;
  * `fixedSection`) JS 쪽 추론이 `any` 로 끝난다. 화면이 읽는 모양을 여기 적어
  * 두고 그 타입으로 받는다 — 집계가 바뀌면 이 줄이 먼저 어긋난다.
  */
-type SectionItem = { key: string; total: number; count: number };
+type SectionItem = { key: string; total: number; count: number; tag?: string };
+
+/** `항목별` 의 한 줄. (분류, 항목) 단위다. */
+type Line = { category: string; item: string; total: number; count: number };
+
+/** 항목 줄 -> 표의 한 줄. 분류가 표 이름과 다르면 작은 꼬리표로 붙인다. */
+function linesAsItems(lines: Line[], kind?: string): SectionItem[] {
+  return lines.map((line) => ({
+    key: line.item,
+    total: line.total,
+    count: line.count,
+    tag: kind !== undefined && line.category === kind ? undefined : line.category,
+  }));
+}
 
 /** 흐름 금액. 부호를 항상 붙인다(0 은 부호 없음). */
 const FLOW = new Intl.NumberFormat("ko-KR", { signDisplay: "exceptZero" });
@@ -98,7 +117,7 @@ const BOX = "w-full border-collapse text-sm";
 const LINE = "border border-zinc-300 dark:border-zinc-700";
 const CELL = `${LINE} px-2 py-1`;
 const NUM = `${CELL} text-right tabular-nums whitespace-nowrap`;
-const HEAD = `${CELL} text-center text-xs font-normal text-zinc-500`;
+const HEAD = `${CELL} whitespace-nowrap text-center text-xs font-normal text-zinc-500`;
 /** 원본의 색칠한 줄. 합계·잔액처럼 눈이 먼저 가야 하는 칸이다. */
 const TONE: Record<string, string> = {
   income: "bg-emerald-50 font-medium dark:bg-emerald-950/40",
@@ -178,7 +197,7 @@ function KindTable({
       <tbody>
         {items.length === 0 ? (
           <tr>
-            <th scope="row" className={`${CELL} text-center`}>
+            <th scope="row" className={`${CELL} whitespace-nowrap text-center`}>
               {kind}
             </th>
             <td className={CELL}>&nbsp;</td>
@@ -186,15 +205,22 @@ function KindTable({
           </tr>
         ) : (
           items.map((item, index) => (
-            <tr key={item.key}>
+            <tr key={`${item.tag ?? ""}\u001f${item.key}`}>
               {index === 0 ? (
-                <th scope="row" rowSpan={items.length} className={`${CELL} text-center`}>
+                <th scope="row" rowSpan={items.length} className={`${CELL} whitespace-nowrap text-center`}>
                   {kind}
                 </th>
               ) : null}
-              <td className={CELL}>
-                {item.key}
-                <span className="ml-1 text-xs text-zinc-500">{item.count}건</span>
+              <td className={`${CELL} break-keep wrap-anywhere`}>
+                <span className="block">{item.key}</span>
+                <span className="block text-xs text-zinc-500">
+                  {item.tag !== undefined ? (
+                    <span className="mr-1 rounded bg-zinc-100 px-1 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                      {item.tag}
+                    </span>
+                  ) : null}
+                  {item.count}건
+                </span>
               </td>
               <td className={NUM}>{flow(item.total)}</td>
             </tr>
@@ -221,6 +247,7 @@ function AccountTable({
   balance: MonthlyReport["계좌별잔액변화"][number] | undefined;
 }) {
   const tone: keyof typeof TONE = block.role === "fixed" ? "fixed" : "emergency";
+  const lines = block.항목 as Line[];
 
   return (
     <table className={BOX}>
@@ -230,13 +257,37 @@ function AccountTable({
       </thead>
       <tbody>
         <WideRow label="입금" value={flow(block.입금.total)} note="메인에서" />
-        <tr>
-          <th scope="row" className={`${CELL} text-center`}>
-            {block.nickname}
-          </th>
-          <td className={CELL}>&nbsp;</td>
-          <td className={NUM}>&nbsp;</td>
-        </tr>
+        {lines.length === 0 ? (
+          <tr>
+            <th scope="row" className={`${CELL} whitespace-nowrap text-center`}>
+              {block.nickname}
+            </th>
+            <td className={CELL}>&nbsp;</td>
+            <td className={NUM}>&nbsp;</td>
+          </tr>
+        ) : (
+          lines.map((line, index) => (
+            <tr key={`${line.category}\u001f${line.item}`}>
+              {index === 0 ? (
+                <th scope="row" rowSpan={lines.length} className={`${CELL} whitespace-nowrap text-center`}>
+                  {block.nickname}
+                </th>
+              ) : null}
+              <td className={`${CELL} break-keep wrap-anywhere`}>
+                <span className="block">{line.item}</span>
+                <span className="block text-xs text-zinc-500">
+                  {line.category !== block.nickname ? (
+                    <span className="mr-1 rounded bg-zinc-100 px-1 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                      {line.category}
+                    </span>
+                  ) : null}
+                  {line.count}건
+                </span>
+              </td>
+              <td className={NUM}>{flow(line.total)}</td>
+            </tr>
+          ))
+        )}
         <WideRow label="합계" value={flow(block.집행.total)} note="집행" />
         <WideRow label="이자" value={flow(block.이자.total)} />
         <WideRow label="순증감" value={flow(block.순증감)} note="입금 + 이자 − 집행" tone="plain" />
@@ -361,24 +412,30 @@ export function ReportView({
   report: MonthlyReport;
   verification: Verification;
 }) {
-  const income = report.수입.items as SectionItem[];
   const fixed1 = report.고정지출1.items as SectionItem[];
   const fixed2 = report.고정지출2.items as SectionItem[];
   const moves = report.계좌간이동.items as SectionItem[];
   const adjustments = report.보정.items;
   const card = report.변동지출.카드대금;
+  const lines = report.항목별 as Record<"수입" | "고정지출1" | "고정지출2" | "변동지출", Line[]>;
   const mainBalance = report.계좌별잔액변화.find((entry) => entry.role === "main");
 
   // 우측 변동비 표 — 원본은 카드사별 줄만 있다. 카드가 아닌 변동지출(`기타`)은
   // 원본에 자리가 없지만 버리면 합계가 맞지 않으므로 줄을 하나 더 둔다.
+  // 카드가 아닌 변동지출은 (분류, 항목) 줄로 풀어 쓴다. 미분류 출금은 `미분류`
+  // 꼬리표가 붙은 채로 적요가 항목 이름이 된다.
+  const otherVariable = linesAsItems(
+    lines.변동지출.filter((line) => line.category !== "카드대금"),
+  );
   const variableItems: SectionItem[] = [
     ...card.issuers.map((issuer) => ({
       key: issuer.issuer,
       total: issuer.total,
       count: issuer.count,
     })),
-    { key: "기타", total: report.변동지출.기타.total, count: report.변동지출.기타.count },
+    ...otherVariable,
   ];
+  const fixed2Shown = fixed2.filter((item) => item.count > 0);
 
   // 종합정산. 원본의 `고정비` · `비상금` 줄은 그 계좌로 **옮긴 돈**이다.
   // 이 레포에서는 계좌 간 이동으로 빠져 있으므로 고정지출2 와 합쳐서 되돌린다.
@@ -432,8 +489,11 @@ export function ReportView({
 
       <p className="text-xs text-zinc-500">
         금액은 저장된 부호 그대로입니다 — {report.signConvention}. 지출은 −, 입금은 +
-        로 표시합니다. 배치는 기존 정산 템플릿을 따르며, 항목(예: 월급 · ISA) 단위
-        줄은 집계가 분류 단위까지만 내려가 비어 있습니다.
+        로 표시합니다. 배치는 기존 정산 템플릿을 따릅니다. 항목 줄은{" "}
+        <Link href={`/classify?month=${report.yearMonth}&filter=all`} className="underline underline-offset-4">
+          분류 정리
+        </Link>
+        에서 정한 항목 이름이고, 정하지 않았으면 적요(카드대금은 카드사) 그대로입니다.
       </p>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -441,7 +501,7 @@ export function ReportView({
         <div className="flex flex-col gap-4">
           <KindTable
             kind="수입"
-            items={income}
+            items={linesAsItems(lines.수입, "수입")}
             total={report.수입.total}
             tone="income"
             caption={`${report.yearMonth} 수입`}
@@ -450,9 +510,26 @@ export function ReportView({
             <KindTable
               key={item.key}
               kind={item.key}
-              items={[]}
+              items={linesAsItems(
+                lines.고정지출1.filter((line) => line.category === item.key),
+                item.key,
+              )}
               total={item.total}
               caption={`${report.yearMonth} ${item.key}`}
+            />
+          ))}
+          {/* 메인 계좌에서 바로 나간 고정비 · 비상금 성격의 지출. 원본에는 없는
+              자리라 건이 있을 때만 그린다. */}
+          {fixed2Shown.map((item) => (
+            <KindTable
+              key={item.key}
+              kind={item.key}
+              items={linesAsItems(
+                lines.고정지출2.filter((line) => line.category === item.key),
+                item.key,
+              )}
+              total={item.total}
+              caption={`${report.yearMonth} 메인 계좌의 ${item.key}`}
             />
           ))}
         </div>
@@ -597,9 +674,17 @@ export function ReportView({
         <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">미분류</h2>
         <p className="text-sm">
           {report.미분류.count}건 (전체 {report.거래건수}건)
+          {report.미분류.count > 0 ? (
+            <Link
+              href={`/classify?month=${report.yearMonth}`}
+              className="ml-2 underline underline-offset-4"
+            >
+              미분류 정리하기
+            </Link>
+          ) : null}
         </p>
         <p className="text-xs text-zinc-500">
-          건수만 보여 줍니다. 어떤 거래인지는 이 화면에 싣지 않습니다.
+          미분류 출금은 위 변동비 표에 ‘미분류’ 꼬리표로, 미분류 입금은 수입 표에 나옵니다.
         </p>
       </section>
     </div>

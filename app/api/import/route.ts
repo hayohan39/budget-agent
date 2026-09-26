@@ -1,4 +1,20 @@
-// 토스뱅크 거래내역 xlsx 업로드 -> 파싱 -> Neon 저장.
+// 토스뱅크 거래내역 xlsx 업로드 -> 파싱 -> (미리보기 | Neon 저장).
+//
+// 요청 모양 (lib/import/request.mjs)
+//
+//   POST /api/import?mode=preview   파일 하나를 끝까지 검증하고 건수만 돌려준다.
+//                                    DB 에는 SELECT 만 나간다. 아무것도 쓰지 않는다.
+//   POST /api/import?mode=apply     파일 하나를 **처음부터 다시** 검증하고 저장한다.
+//                                    미리보기 결과는 받지도 믿지도 않는다.
+//
+//   mode 가 없거나 위 둘이 아니면 400 이다. 기본값은 없다 — 모드를 빠뜨린 요청이
+//   적용으로 흘러가는 일이 없도록, 본문을 읽기도 전에 거부한다.
+//
+//   요청 하나에 파일 하나다. 여러 파일은 클라이언트가 나눠 보낸다(Vercel 요청
+//   본문 상한 4.5MB — 4MB 파일 두 개만 실어도 넘는다).
+//
+// 미리보기 사이에 서버는 아무것도 들고 있지 않는다. 파일은 적용 전까지 브라우저
+// 메모리에만 있다. 저장하지 않은 데이터는 유출될 수 없다(CLAUDE.md).
 //
 // 이 파일은 껍데기다. 인증 · Origin 확인 · multipart 해석 · 직렬화만 한다.
 // 실제 흐름은 lib/import/statement.mjs 에 있다(Next.js 없이 단위 테스트한다).
@@ -13,7 +29,7 @@
 //   - console 호출이 이 파일에 없다. 에러 객체 · 스택 · DB 메시지는 어디로도
 //     나가지 않는다(CLAUDE.md).
 //   - **파일 비밀번호는 저장하지 않는다.** 이 요청의 multipart 본문에서 한 번
-//     읽어 importStatementBuffer 에 넘기고 끝이다. 환경변수 · DB · 파일 어디에도
+//     읽어 import/previewStatementBuffer 에 넘기고 끝이다. 환경변수 · DB · 파일 어디에도
 //     두지 않고, 응답으로 되비추지도 않으며, 길이조차 알리지 않는다.
 import { NextResponse } from "next/server";
 
@@ -21,9 +37,16 @@ import { auth, isAllowedEmail } from "@/auth";
 import { listAccounts } from "@/lib/db/accounts.mjs";
 import { withClient } from "@/lib/db/client.mjs";
 import {
+  IMPORT_MODES,
+  MODE_PARAM,
+  exceedsRequestLimit,
+  parseImportMode,
+  pickSingleUpload,
+} from "@/lib/import/request.mjs";
+import {
   MAX_FILE_BYTES,
-  MAX_FILE_COUNT,
   importStatementBuffer,
+  previewStatementBuffer,
 } from "@/lib/import/statement.mjs";
 import { MAX_PASSWORD_LENGTH } from "@/lib/xlsx/crypto.mjs";
 
@@ -45,20 +68,14 @@ export const PASSWORD_FIELD = "password";
 /** 되비추는 파일명 길이 상한. 사용자가 준 값 그대로지만 무한정 길 수 있다. */
 const MAX_FILENAME_LENGTH = 200;
 
-type FileResult = {
-  filename: string;
-  ok: boolean;
-  account?: { role: string; nickname: string };
-  period?: { from: string; to: string };
-  inserted?: number;
-  skipped?: number;
-  warnings?: string[];
-  error?: string;
-  message?: string;
-};
+/**
+ * 응답은 어떤 캐시에도 남지 않게 한다. 거래 내용은 없지만 계좌 별명 · 건수 ·
+ * 조회기간이 들어 있고, 공유 프록시나 브라우저 캐시에 남길 이유가 없다.
+ */
+const NO_STORE = { "Cache-Control": "no-store" } as const;
 
 function bare(message: string, status: number) {
-  return NextResponse.json({ error: message }, { status });
+  return NextResponse.json({ error: message }, { status, headers: NO_STORE });
 }
 
 /**
@@ -104,7 +121,27 @@ export async function POST(request: Request) {
     return bare("허용되지 않은 요청입니다.", 403);
   }
 
-  // 3. multipart 해석.
+  // 3. 모드. URL 에서 읽으므로 본문을 읽기 전에 판정한다. 없거나 모르는 값이면
+  //    거부한다 — 절대 적용으로 기본값을 잡지 않는다.
+  let mode: "preview" | "apply" | null;
+  try {
+    mode = parseImportMode(new URL(request.url).searchParams.get(MODE_PARAM));
+  } catch {
+    mode = null;
+  }
+  if (mode === null) {
+    return bare("요청 모드가 올바르지 않습니다.", 400);
+  }
+
+  // 4. 본문 크기. 헤더만 보고 본문을 읽기 전에 막는다.
+  if (exceedsRequestLimit(request.headers.get("content-length"))) {
+    return bare(
+      `한 번에 파일 하나, ${Math.floor(MAX_FILE_BYTES / (1024 * 1024))}MB 까지만 올릴 수 있습니다.`,
+      413,
+    );
+  }
+
+  // 5. multipart 해석.
   let form: FormData;
   try {
     form = await request.formData();
@@ -112,21 +149,15 @@ export async function POST(request: Request) {
     return bare("업로드 형식이 올바르지 않습니다.", 400);
   }
 
-  const uploads = form
-    .getAll(FILE_FIELD)
-    .filter((entry): entry is File => typeof entry === "object" && entry !== null && "arrayBuffer" in entry)
-    // 파일을 고르지 않은 채 폼을 보내면 브라우저는 이름도 내용도 없는 파트를
-    // 하나 실어 보낸다. 그것은 "파일 0개"로 센다.
-    .filter((file) => file.size > 0 || file.name !== "");
-
-  if (uploads.length === 0) {
-    return bare("올릴 파일을 선택해 주세요.", 400);
+  const picked = pickSingleUpload(form.getAll(FILE_FIELD));
+  if (!picked.ok) {
+    return picked.error === "noFile"
+      ? bare("올릴 파일을 선택해 주세요.", 400)
+      : bare("요청 하나에 파일 하나만 올릴 수 있습니다.", 400);
   }
-  if (uploads.length > MAX_FILE_COUNT) {
-    return bare(`한 번에 ${MAX_FILE_COUNT}개까지만 올릴 수 있습니다.`, 400);
-  }
+  const file = picked.file as File;
 
-  // 4. 비밀번호. 파일마다 따로 받지 않는다 — 세 계좌가 같은 비밀번호다.
+  // 6. 비밀번호. 파일마다 따로 받지 않는다 — 세 계좌가 같은 비밀번호다.
   //    값은 읽어서 넘기기만 한다. 로그에도 응답에도 담지 않고, 길이가 상한을
   //    넘으면 그 사실만 알린다(값도, 실제 길이도 말하지 않는다).
   const rawPassword = form.get(PASSWORD_FIELD);
@@ -140,43 +171,43 @@ export async function POST(request: Request) {
   const password =
     typeof rawPassword === "string" && rawPassword.length > 0 ? rawPassword : undefined;
 
-  // 5. 크기. 파싱 전에, 바이트를 읽기 전에 막는다.
-  const oversize = uploads.filter((file) => file.size > MAX_FILE_BYTES);
-  if (oversize.length > 0) {
+  // 7. 파일 크기. 파싱 전에, 바이트를 읽기 전에 막는다.
+  if (file.size > MAX_FILE_BYTES) {
     return bare(
       `한 파일당 ${Math.floor(MAX_FILE_BYTES / (1024 * 1024))}MB 까지만 올릴 수 있습니다.`,
       413,
     );
   }
 
-  // 6. 파일별 처리. 하나가 실패해도 나머지는 계속한다.
-  let results: FileResult[];
+  const filename = toSafeFilename(file.name);
+  let buffer: Buffer;
   try {
-    results = await withClient(async (client) => {
+    // 메모리에서만 다룬다. 어떤 경로로도 디스크에 쓰지 않는다.
+    buffer = Buffer.from(await file.arrayBuffer());
+  } catch {
+    return NextResponse.json(
+      {
+        mode,
+        result: { filename, ok: false, error: "readFailed", message: "파일을 읽지 못했습니다." },
+      },
+      { headers: NO_STORE },
+    );
+  }
+
+  // 8. 처리. 미리보기든 적용이든 파일 바이트와 비밀번호만 넘긴다 — 클라이언트가
+  //    보낸 건수 · 키 같은 것은 애초에 받지 않는다.
+  let outcome: Record<string, unknown>;
+  try {
+    outcome = await withClient(async (client) => {
       const accounts = await listAccounts(client);
-      const collected: FileResult[] = [];
-
-      for (const file of uploads) {
-        const filename = toSafeFilename(file.name);
-        let buffer: Buffer;
-        try {
-          // 메모리에서만 다룬다. 어떤 경로로도 디스크에 쓰지 않는다.
-          buffer = Buffer.from(await file.arrayBuffer());
-        } catch {
-          collected.push({ filename, ok: false, error: "readFailed", message: "파일을 읽지 못했습니다." });
-          continue;
-        }
-
-        const outcome = await importStatementBuffer(buffer, { client, accounts, password });
-        collected.push({ filename, ...outcome });
-      }
-
-      return collected;
+      return mode === IMPORT_MODES.apply
+        ? importStatementBuffer(buffer, { client, accounts, password })
+        : previewStatementBuffer(buffer, { client, accounts, password });
     });
   } catch {
     // 연결 실패 · 계좌 목록 조회 실패. 원인 객체는 어디로도 내보내지 않는다.
     return bare("데이터베이스에 연결하지 못했습니다.", 503);
   }
 
-  return NextResponse.json({ results });
+  return NextResponse.json({ mode, result: { filename, ...outcome } }, { headers: NO_STORE });
 }

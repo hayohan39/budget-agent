@@ -433,16 +433,48 @@ test('잔액 0 은 빈 값이 아니다', () => {
 
 // ── 로그 위생 ──────────────────────────────────────────────────────────────
 
-test('결과에 적요·메모·거래 일시가 들어가지 않는다', () => {
+test('결과에 메모·거래 일시·잔액이 들어가지 않고, 적요는 항목 이름 자리에만 나온다', () => {
+  // 적요는 이제 항목 이름으로 화면에 나온다(PLAN.md "적요 표시 원칙 변경").
+  // 그 밖의 행 단위 값은 여전히 결과에 실리지 않는다.
   const result = report([
-    row({ id: '1', amount: '3500000', description: '김철수', txn_type: '입금' }),
+    row({
+      id: '1',
+      amount: '3500000',
+      balance: '9876543',
+      description: '김철수',
+      txn_type: '입금',
+      memo: '비밀메모',
+      txn_at: '2026-08-10T12:34:56+09:00',
+    }),
     row({ id: '2', amount: '-170000', description: '이영희', txn_type: '모임원송금' }),
   ]);
   const serialized = JSON.stringify(result);
 
-  for (const leak of ['김철수', '이영희', '2026-08-10T00:00:00']) {
+  for (const leak of ['비밀메모', '2026-08-10T12:34:56', '12:34:56', '9876543', '모임원송금']) {
     assert.ok(!serialized.includes(leak), `${leak} 이(가) 새어 나왔다`);
   }
+
+  // 적요는 항목별 줄의 item 에만 있다. 항목별을 걷어 내면 어디에도 없다.
+  const { 항목별, 계좌블록, ...rest } = result;
+  const withoutLines = JSON.stringify({
+    ...rest,
+    계좌블록: 계좌블록.map((block) => {
+      const copy = { ...block };
+      delete copy.항목;
+      return copy;
+    }),
+  });
+  for (const description of ['김철수', '이영희']) {
+    assert.ok(!withoutLines.includes(description), `${description} 이(가) 항목 줄 밖에 나왔다`);
+  }
+  assert.deepEqual(
+    항목별.수입.map((line) => line.item),
+    ['김철수'],
+  );
+  assert.deepEqual(
+    항목별.변동지출.map((line) => line.item),
+    ['이영희'],
+  );
 });
 
 // ── fixture 한 달치 ────────────────────────────────────────────────────────

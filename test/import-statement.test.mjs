@@ -291,6 +291,8 @@ test('직렬화한 결과에 적요·메모·금액·잔액·계좌 뒤 4자리�
     'ok',
     'period',
     'skipped',
+    // 파일 단위 미분류 건수. 건수일 뿐 행 내용이 아니다.
+    'unclassified',
     'warnings',
   ]);
   assert.deepEqual(Object.keys(result.account).sort(), ['nickname', 'role']);
