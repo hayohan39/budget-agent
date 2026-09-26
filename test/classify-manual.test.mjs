@@ -15,6 +15,7 @@ import {
   CLASSIFY_ERROR_MESSAGES,
   CLASSIFY_FILTERS,
   applyClassification,
+  countUnclassified,
   deleteMapping,
   groupKeyOf,
   groupRows,
@@ -68,7 +69,8 @@ test('올바른 요청은 정규화된 키 · 항목으로 통과한다', () => 
 });
 
 test('허용 목록 밖의 분류는 거부한다', () => {
-  for (const category of ['손수정', '', ' 고정비', '미분류', '기타', null, 1, ['고정비']]) {
+  // '기타' 는 이제 허용 목록에 있다(아래 루프가 통과를 확인한다). '미분류' 는 여전히 아니다.
+  for (const category of ['손수정', '', ' 고정비', '미분류', ' 기타', '기타 ', null, 1, ['고정비']]) {
     const parsed = parseClassifyRequest(valid({ category }));
     assert.equal(parsed.ok, false, String(category));
     assert.equal(parsed.error, 'badCategory');
@@ -682,5 +684,63 @@ test('any 매핑만 있을 때 지우면 양쪽 방향의 map 행이 모두 다�
     const outcome = await deleteMapping(client, { key: '김철수', direction: 'any' });
     assert.deepEqual(outcome, { ok: true, reclassified: 0, unclassified: 4 });
     assert.ok((await directedRowsOf(client, '김철수')).every((row) => row[2] === null && row[4] === null));
+  });
+});
+
+// ── 기타 ───────────────────────────────────────────────────────────────────
+
+test('기타로 고른 묶음은 분류된 것이다 — 미분류만 보기와 미분류 건수에서 빠진다', () => {
+  const rows = [
+    { description: '이영희', amount: '-7500', category: '기타', category_source: 'manual' },
+    { description: '김철수', amount: '34000', category: null },
+  ];
+  assert.deepEqual(
+    groupRows(rows, CLASSIFY_FILTERS.unclassified).map((group) => group.key),
+    ['김철수'],
+  );
+  const other = groupRows(rows, CLASSIFY_FILTERS.all).find((group) => group.key === '이영희');
+  assert.deepEqual([other.category, other.unclassified, other.mixed], ['기타', 0, false]);
+});
+
+test('기타로 처리: 이번만 · 앞으로도 모두 되고, 앞으로도는 그 방향의 기타 매핑을 저장한다', async (t) => {
+  await withScratchDatabase(t, 'classify_other', async (client) => {
+    await importFixture(client);
+    assert.equal(await countUnclassified(client, '2026-08'), 8);
+
+    // 출금 묶음(이영희) — 앞으로도.
+    const always = await applyClassification(
+      client,
+      valid({ scope: 'always', key: '이영희', direction: 'out', category: '기타', item: null }),
+    );
+    assert.deepEqual(always, { ok: true, updated: 1, mapped: true });
+    assert.deepEqual(await mapRows(client), [['이영희', 'out', '기타', null]]);
+    assert.equal(await countUnclassified(client, '2026-08'), 7);
+
+    // 입금 묶음(김철수 입금 3건) — 이번만. 출금 1건은 미분류로 남는다.
+    const once = await applyClassification(
+      client,
+      valid({ scope: 'once', key: '김철수', direction: 'in', category: '기타', item: null }),
+    );
+    assert.deepEqual(once, { ok: true, updated: 3, mapped: false });
+    assert.equal(await countUnclassified(client, '2026-08'), 4);
+
+    const unclassified = await listClassifyGroups(client, '2026-08', CLASSIFY_FILTERS.unclassified);
+    assert.ok(!unclassified.some((group) => group.key === '이영희'));
+    assert.deepEqual(
+      unclassified.filter((group) => group.key === '김철수').map((group) => group.direction),
+      ['out'],
+    );
+
+    const report = await buildMonthlyReport(client, '2026-08');
+    assert.equal(report.미분류.count, 4);
+    assert.deepEqual(
+      report.항목별.변동지출.find((line) => line.category === '기타'),
+      { category: '기타', item: '이영희', direction: 'out', total: -7500, count: 1 },
+    );
+    assert.deepEqual(
+      report.항목별.수입.find((line) => line.category === '기타'),
+      { category: '기타', item: '김철수', direction: 'in', total: 4534000, count: 3 },
+    );
+    assert.equal(verifyMonthlyReport(report).ok, true);
   });
 });

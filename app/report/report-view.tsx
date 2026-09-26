@@ -702,6 +702,8 @@ export function ReportView({
         </p>
         <p className="text-xs text-zinc-500">
           미분류 출금은 위 변동비 표에 ‘미분류’ 꼬리표로, 미분류 입금은 수입 표에 나옵니다.
+          ‘기타’로 처리한 거래는 분류된 것으로 세며, 출금은 변동비 표에 ‘기타’ 꼬리표로,
+          입금은 수입 표에 ‘기타’ 꼬리표로 나옵니다.
         </p>
       </section>
     </div>

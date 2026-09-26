@@ -21,6 +21,7 @@ import {
   FIXED1_CATEGORIES,
   FIXED2_CATEGORIES,
   INCOME_CATEGORIES,
+  OTHER_CATEGORY,
   SECTIONS,
   TRANSFER_CATEGORIES,
   VARIABLE_CATEGORY,
@@ -256,8 +257,10 @@ test('허용 목록은 집계가 칸을 가진 분류 전부이고 그 밖에는
       CARD_CATEGORY,
       VARIABLE_CATEGORY,
       ...Object.keys(TRANSFER_CATEGORIES),
+      OTHER_CATEGORY,
     ]),
   );
+  assert.ok(CLASSIFY_CATEGORIES.includes('기타'));
   assert.equal(new Set(CLASSIFY_CATEGORIES).size, CLASSIFY_CATEGORIES.length, '중복 없음');
   // 보정 대상 이름(adjustments_target_valid)과 어긋나지 않는다.
   for (const target of ['수입', '저축', '용돈', '주거비', '고정비', '비상금', '변동비']) {
@@ -290,6 +293,7 @@ test('출금 분류마다 기대한 칸으로 간다', () => {
     비상금: SECTIONS.fixed2,
     카드대금: SECTIONS.card,
     변동비: SECTIONS.variable,
+    기타: SECTIONS.variable,
     고정비이체: SECTIONS.transfer,
     비상금이체: SECTIONS.transfer,
   };
@@ -331,9 +335,66 @@ test('모든 허용 분류 × 양쪽 부호로 집계해도 항목 줄과 항등
       result.종합정산.계좌간이동,
     result.종합정산.실현순증감,
   );
-  // 변동지출 기타에는 사람이 고른 '변동비' 출금만 있다 — 목록 밖 갈래로 샌 것이 없다.
+  // 변동지출의 카드 아닌 부분에는 사람이 고른 '변동비' · '기타' 출금만 있다 — 목록 밖
+  // 갈래로 샌 것이 없다. 둘은 서로 다른 줄이다.
   assert.deepEqual(
     [...new Set(result.항목별.변동지출.filter((line) => line.category !== CARD_CATEGORY).map((line) => line.category))],
-    [VARIABLE_CATEGORY],
+    [VARIABLE_CATEGORY, OTHER_CATEGORY],
   );
+});
+
+// ── 기타 ───────────────────────────────────────────────────────────────────
+
+test('기타: 출금은 변동지출의 기타 줄, 입금은 수입의 기타 줄로 가고 미분류로 세지 않는다', () => {
+  assert.deepEqual(placeMainRow({ category: OTHER_CATEGORY, amount: '-1' }), {
+    section: SECTIONS.variable,
+    key: OTHER_CATEGORY,
+    explicit: true,
+  });
+  assert.deepEqual(placeMainRow({ category: OTHER_CATEGORY, amount: '1' }), {
+    section: SECTIONS.income,
+    key: OTHER_CATEGORY,
+    explicit: true,
+  });
+
+  // fixture 의 미분류 8건 중 김철수(입금 3 · 출금 1)와 이영희(출금 1)를 기타로 고른다.
+  const baseline = aggregateMonthly({ yearMonth: '2026-08', accounts: ACCOUNTS, rows: fixtureRows() });
+  const rows = fixtureRows((record) =>
+    record.description === '김철수' || record.description === '이영희'
+      ? { category: OTHER_CATEGORY, category_source: 'manual' }
+      : {},
+  );
+  const result = aggregateMonthly({ yearMonth: '2026-08', accounts: ACCOUNTS, rows });
+  assertLinesAddUp(result);
+
+  assert.equal(baseline.미분류.count, 8);
+  assert.equal(result.미분류.count, 3, '기타는 분류된 것이다');
+
+  // 출금: 변동지출에서 미분류 · 변동비와 다른 '기타' 줄.
+  assert.deepEqual(
+    result.항목별.변동지출
+      .filter((line) => line.category !== CARD_CATEGORY)
+      .map((line) => [line.category, line.item, line.direction, line.total]),
+    [
+      ['기타', '김철수', 'out', -170000],
+      ['기타', '이영희', 'out', -7500],
+      ['미분류', '코웨이08월렌탈', 'out', -3780],
+    ],
+  );
+  // 입금: 수입 섹션의 '기타' 분류 줄과 항목 줄.
+  assert.deepEqual(
+    result.수입.items.find((item) => item.key === OTHER_CATEGORY),
+    { key: OTHER_CATEGORY, total: 4534000, count: 3 },
+  );
+  assert.deepEqual(
+    result.항목별.수입.filter((line) => line.category === OTHER_CATEGORY),
+    [{ category: OTHER_CATEGORY, item: '김철수', direction: 'in', total: 4534000, count: 3 }],
+  );
+
+  // 합계는 자리만 옮겼다 — 섹션 합계 · 실현순증감 · 검산이 그대로다.
+  assert.equal(result.수입.total, baseline.수입.total);
+  assert.equal(result.변동지출.total, baseline.변동지출.total);
+  assert.equal(result.변동지출.기타.total, baseline.변동지출.기타.total);
+  assert.equal(result.종합정산.실현순증감, baseline.종합정산.실현순증감);
+  assert.equal(verifyMonthlyReport(result).ok, true);
 });

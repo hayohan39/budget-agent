@@ -137,14 +137,23 @@ function CategorySelect({
   );
 }
 
+/**
+ * 한 묶음의 입력.
+ *
+ * "기타로 처리" 는 분류 선택 없이 `otherCategory`(기타)로 바로 보낸다. 범위(이번만 ·
+ * 앞으로도)와 항목은 폼에서 고른 값을 그대로 쓴다 — 앞으로도면 이 묶음의 방향으로
+ * 기타 매핑이 저장된다.
+ */
 export function GroupForm({
   month,
   group,
   categories,
+  otherCategory,
 }: {
   month: string;
   group: ClassifyGroup;
   categories: string[];
+  otherCategory: string;
 }) {
   const router = useRouter();
   const [category, setCategory] = useState(
@@ -157,9 +166,8 @@ export function GroupForm({
   // id 에 적요를 넣지 않는다(DOM id 에 한글·공백이 섞이면 label 연결이 깨진다).
   const uid = useId();
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (category === "") {
+  async function send(chosen: string) {
+    if (chosen === "") {
       setStatus({ kind: "error", text: "분류를 골라 주세요." });
       return;
     }
@@ -170,7 +178,7 @@ export function GroupForm({
         month,
         key: group.key,
         direction: group.direction,
-        category,
+        category: chosen,
         item,
       });
       if (!ok) {
@@ -181,10 +189,16 @@ export function GroupForm({
         kind: "done",
         text: `${String(data.updated ?? 0)}건에 적용했습니다${data.mapped === true ? " · 매핑 저장" : ""}.`,
       });
+      if (chosen !== category) setCategory(chosen);
       router.refresh();
     } catch {
       setStatus({ kind: "error", text: "서버에 연결하지 못했습니다." });
     }
+  }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void send(category);
   }
 
   const current = group.mixed
@@ -265,6 +279,17 @@ export function GroupForm({
         <button type="submit" className={BUTTON} disabled={status.kind === "busy"}>
           {status.kind === "busy" ? "저장 중…" : "적용"}
         </button>
+        {categories.includes(otherCategory) ? (
+          <button
+            type="button"
+            className={BUTTON}
+            disabled={status.kind === "busy"}
+            onClick={() => void send(otherCategory)}
+            title="따로 나눌 필요가 없는 거래를 ‘기타’로 분류합니다. 고른 적용 범위를 따릅니다."
+          >
+            기타로 처리
+          </button>
+        ) : null}
       </div>
       <StatusLine status={status} />
     </form>

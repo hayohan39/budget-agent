@@ -21,7 +21,7 @@ import { redirect } from "next/navigation";
 import { auth, isAllowedEmail } from "@/auth";
 import { withClient } from "@/lib/db/client.mjs";
 import { isYearMonth, listYearMonths } from "@/lib/report/months.mjs";
-import { CLASSIFY_CATEGORIES } from "@/lib/report/monthly.mjs";
+import { CLASSIFY_CATEGORIES, OTHER_CATEGORY } from "@/lib/report/monthly.mjs";
 import { CLASSIFY_FILTERS, listClassifyGroups, listMappings } from "@/lib/classify/manual.mjs";
 import { ITEM_MAX_LENGTH } from "@/lib/classify/item.mjs";
 
@@ -180,7 +180,8 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
             <strong>앞으로도</strong>는 매핑으로 저장해 다른 달의 같은 적요와 앞으로
             올릴 거래 중 <strong>같은 방향</strong>의 거래에 적용합니다(반대 방향의 거래와
             ‘이번만’으로 고른 다른 달의 거래는 건드리지 않습니다). 항목 이름은 {ITEM_MAX_LENGTH}자까지이며, 비워 두면 적요를 그대로
-            씁니다.
+            씁니다. 따로 나눌 필요가 없는 거래는 <strong>기타로 처리</strong>를 누르면
+            고른 범위로 ‘기타’ 분류가 됩니다(분류된 것으로 세어 미분류에서 빠집니다).
           </p>
           {loaded.groups.length === 0 ? (
             <p className="text-sm text-zinc-600 dark:text-zinc-400">
@@ -192,7 +193,12 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
             <ul className="flex flex-col gap-3">
               {loaded.groups.map((group) => (
                 <li key={`${group.direction}\u001f${group.key}`}>
-                  <GroupForm month={loaded.month as string} group={group} categories={categories} />
+                  <GroupForm
+                    month={loaded.month as string}
+                    group={group}
+                    categories={categories}
+                    otherCategory={OTHER_CATEGORY}
+                  />
                 </li>
               ))}
             </ul>
