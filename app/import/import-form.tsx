@@ -23,6 +23,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { nextStagedAfterApply } from "@/lib/import/staged.mjs";
+
 const FILE_FIELD = "files";
 const PASSWORD_FIELD = "password";
 const MAX_FILE_COUNT = 3;
@@ -444,24 +446,20 @@ export function ImportForm() {
         });
       }
     } finally {
-      // 적용이 끝나면 성공 여부와 상관없이 비밀번호를 비운다.
-      setPassword("");
       setBusy(null);
     }
 
     setApplied(results);
-    const succeeded = new Set(results.filter((r) => r.outcome.ok).map((r) => r.key));
-    if (succeeded.size === results.length) {
-      // 전부 성공했으면 담아 둔 파일을 비운다. 브라우저 메모리에서도 놓아준다.
-      setStaged([]);
-    } else {
-      // 성공한 파일만 빼고, 실패한 파일은 다시 확인할 수 있게 남긴다.
-      setStaged((list) =>
-        list
-          .filter((item) => !succeeded.has(item.key))
-          .map((item) => ({ ...item, preview: { status: "idle" }, selected: false })),
-      );
-    }
+    // 보내서 성공한 파일만 뺀다(브라우저 메모리에서도 놓아준다). 실패한 파일은
+    // 체크한 채로 남기고, 체크하지 않아 보내지 않은 파일은 미리보기째 그대로 둔다.
+    const sentKeys = applyTargets.map((item) => item.key);
+    setStaged((list) => nextStagedAfterApply(list, sentKeys, results));
+    // 비밀번호는 암호 걸린 파일이 하나도 남지 않을 때 비운다. 남은 암호 파일
+    // (실패했거나 체크하지 않은 것)이 있으면 다시 입력하게 하지 않는다.
+    // 적용 중에 확인이 끝난 파일은 이 판단에 들어가지 않는다 — 그 경우 비우는
+    // 쪽으로 틀릴 뿐이다(미리보기부터 다시 하면 된다).
+    const remaining = nextStagedAfterApply(staged, sentKeys, results);
+    if (!remaining.some((item) => item.sniff === "encrypted")) setPassword("");
   }
 
   // 같은 계좌로 풀린 파일이 둘 이상이면 알려 준다(겹치는 거래는 중복으로 건너뛴다).
@@ -546,6 +544,9 @@ export function ImportForm() {
             <tbody>
               {staged.map((item) => {
                 const ok = item.preview.status === "ok" ? item.preview.data : null;
+                const applyResult = applied?.find((result) => result.key === item.key);
+                const applyFailure =
+                  applyResult !== undefined && !applyResult.outcome.ok ? applyResult.outcome.failure : null;
                 return (
                   <tr key={item.key} className="border-t border-zinc-200 align-top dark:border-zinc-800">
                     <td className="py-2 pr-2">
@@ -574,6 +575,11 @@ export function ImportForm() {
                           </p>
                           <Warnings codes={ok.warnings} />
                         </div>
+                      ) : null}
+                      {applyFailure !== null ? (
+                        <p className="mt-1 text-xs text-red-700 dark:text-red-400">
+                          적용 실패 · {applyFailure.message}
+                        </p>
                       ) : null}
                     </td>
                     <td className="py-2 pr-2 whitespace-nowrap">{SNIFF_LABEL[item.sniff]}</td>
@@ -622,7 +628,7 @@ export function ImportForm() {
             <p className="text-xs text-zinc-500 dark:text-zinc-500">
               암호가 걸린 파일이 있습니다. 세 파일 모두 같은 비밀번호로 풉니다.{" "}
               <strong className="font-medium">비밀번호는 서버에 저장하지 않습니다.</strong>{" "}
-              요청마다 한 번 쓰고 바로 버리며, 적용이 끝나면 이 입력칸도 비웁니다.
+              요청마다 한 번 쓰고 바로 버리며, 암호 걸린 파일이 남지 않으면 이 입력칸도 비웁니다.
             </p>
           </div>
         ) : null}
