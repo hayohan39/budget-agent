@@ -687,6 +687,109 @@ test('any 매핑만 있을 때 지우면 양쪽 방향의 map 행이 모두 다�
   });
 });
 
+// ── 동시 쓰기 ──────────────────────────────────────────────────────────────
+
+/**
+ * `query` 를 가로채 `pattern` 을 포함한 첫 문장 직전에 멈추는 연결 래퍼.
+ * `paused` 는 멈춘 순간 풀리고, `release()` 를 부르면 그 문장을 보낸다.
+ */
+function pauseBefore(client, pattern) {
+  let signalPaused;
+  let release;
+  const paused = new Promise((resolve) => {
+    signalPaused = resolve;
+  });
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  let armed = true;
+  return {
+    paused,
+    release,
+    client: {
+      async query(text, params) {
+        if (armed && typeof text === 'string' && text.includes(pattern)) {
+          armed = false;
+          signalPaused();
+          await gate;
+        }
+        return client.query(text, params);
+      },
+    },
+  };
+}
+
+/** `promise` 가 끝나거나 그 연결(pid)이 잠금을 기다리기 시작할 때까지 기다린다. */
+async function settledOrWaitingOnLock(observer, pid, promise) {
+  let done = false;
+  promise.then(
+    () => {
+      done = true;
+    },
+    () => {
+      done = true;
+    },
+  );
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (done) return 'settled';
+    const activity = await observer.query('SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1', [pid]);
+    if (activity.rows[0]?.wait_event_type === 'Lock') return 'waiting';
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error('두 번째 쓰기가 끝나지도, 잠금을 기다리지도 않았다');
+}
+
+test('동시 쓰기: any 수정 도중 끼어든 같은 키의 방향 매핑이 덮어써지지 않는다', async (t) => {
+  await withScratchDatabase(t, 'classify_race', async (client, url) => {
+    await importFixture(client);
+    await client.query(`INSERT INTO merchant_map (description, category) VALUES ('김철수', '변동비')`);
+    await classifyStored(client);
+
+    const { default: pg } = await import('pg');
+    const second = new pg.Client({ connectionString: url });
+    second.on('error', () => {});
+    await second.connect();
+    t.after(() => second.end().catch(() => {}));
+    const secondPid = (await second.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+
+    const firstConn = new pg.Client({ connectionString: url });
+    firstConn.on('error', () => {});
+    await firstConn.connect();
+    t.after(() => firstConn.end().catch(() => {}));
+
+    // T1: (김철수, any) 수정. merchant_map 을 고치고 governedDirections 로 [in, out]
+    // 을 계산한 뒤, 첫 UPDATE transactions 직전에 트랜잭션을 연 채로 멈춘다.
+    const gated = pauseBefore(firstConn, 'UPDATE transactions');
+    const edit = updateMapping(gated.client, { key: '김철수', direction: 'any', category: '수입', item: null });
+    await gated.paused;
+
+    // T2: 같은 키의 출금 묶음을 앞으로도 기타로. 다른 기본키 행이라 행 잠금으로는
+    // T1 과 줄 서지 않는다 — 키 단위 잠금이 있으면 여기서 기다린다.
+    const always = applyClassification(
+      second,
+      valid({ scope: 'always', key: '김철수', direction: 'out', category: '기타', item: null }),
+    );
+    await settledOrWaitingOnLock(client, secondPid, always);
+
+    gated.release();
+    const [editOutcome, alwaysOutcome] = await Promise.all([edit, always]);
+    assert.equal(editOutcome.ok, true);
+    assert.equal(alwaysOutcome.ok, true);
+
+    // 매핑은 any: 수입, out: 기타. 출처 map 인 행은 자기를 다스리는 매핑과 같아야 한다.
+    assert.deepEqual(await mapRows(client), [
+      ['김철수', 'any', '수입', null],
+      ['김철수', 'out', '기타', null],
+    ]);
+    const mapped = (await directedRowsOf(client, '김철수')).filter((row) => row[4] === 'map');
+    assert.ok(mapped.some((row) => row[1] === 'out'), '출금 map 행이 있어야 검사가 의미 있다');
+    for (const [, direction, category] of mapped) {
+      assert.equal(category, direction === 'out' ? '기타' : '수입', `${direction} 행이 매핑과 어긋난다`);
+    }
+  });
+});
+
 // ── 기타 ───────────────────────────────────────────────────────────────────
 
 test('기타로 고른 묶음은 분류된 것이다 — 미분류만 보기와 미분류 건수에서 빠진다', () => {

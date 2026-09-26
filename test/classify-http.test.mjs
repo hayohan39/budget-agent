@@ -29,6 +29,7 @@ function fakeClient() {
     async query(text, values = []) {
       queries.push({ text, values });
       if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(text)) return { rows: [], rowCount: 0 };
+      if (text.startsWith('SELECT pg_advisory_xact_lock(')) return { rows: [{}], rowCount: 1 };
       if (text.startsWith('SELECT id, description, amount FROM transactions WHERE year_month')) {
         return { rows: [{ id: '41', description: '코인적립', amount: '-200000' }], rowCount: 1 };
       }
@@ -157,6 +158,10 @@ test('classify: 앞으로도는 묶음의 방향으로 매핑을 저장한다(�
   const insert = d.client.queries.find((query) => query.text.includes('INSERT INTO merchant_map'));
   assert.deepEqual(insert.values, ['코인적립', 'out', '저축', '코인']);
   assert.match(insert.text, /ON CONFLICT \(description, direction\)/);
+  // BEGIN 바로 다음이 키 단위 잠금이다. 키는 파라미터로만 나간다.
+  assert.equal(d.client.queries[0].text, 'BEGIN');
+  assert.match(d.client.queries[1].text, /^SELECT pg_advisory_xact_lock\(\$1::int4, hashtext\(\$2::text\)\)$/);
+  assert.equal(d.client.queries[1].values[1], '코인적립');
 });
 
 test('classify: 없는 키는 404 이고 키를 되비추지 않는다', async () => {
