@@ -1,0 +1,280 @@
+// 현금흐름표의 항목 줄(항목별 · 계좌블록[].항목)과 분류 허용 목록.
+//
+// 지키는 것
+//   1. 항목 줄의 합 = 그 섹션의 합계(건수도). 섹션 합계 · 실현순증감 · 검산은
+//      항목 줄이 생기기 전과 같다.
+//   2. /classify 가 고를 수 있는 분류(CLASSIFY_CATEGORIES)는 부호와 무관하게
+//      전부 집계의 명시적인 칸에 들어간다. "어느 칸에도 없는 분류" 갈래로
+//      떨어지는 것이 하나도 없다.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { openXlsxFile } from '../lib/xlsx/workbook.mjs';
+import { parseTossStatement } from '../lib/toss/statement.mjs';
+import { toTransactionRecords } from '../lib/toss/normalize.mjs';
+import { classifyRecords, createClassifier } from '../lib/classify/engine.mjs';
+import {
+  CARD_CATEGORY,
+  CLASSIFY_CATEGORIES,
+  FIXED1_CATEGORIES,
+  FIXED2_CATEGORIES,
+  INCOME_CATEGORIES,
+  SECTIONS,
+  TRANSFER_CATEGORIES,
+  VARIABLE_CATEGORY,
+  aggregateMonthly,
+  placeMainRow,
+} from '../lib/report/monthly.mjs';
+import { verifyMonthlyReport } from '../lib/report/verify.mjs';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const FIXTURE = path.join(HERE, 'fixtures', 'toss-sample-masked.xlsx');
+
+const ACCOUNTS = Object.freeze([
+  { id: 1, role: 'main', last4: '1288', nickname: '메인' },
+  { id: 2, role: 'fixed', last4: '2222', nickname: '고정비' },
+  { id: 3, role: 'emergency', last4: '3333', nickname: '비상금' },
+]);
+
+const SEED_RULES = Object.freeze([
+  { id: 1, txn_type: null, pattern: '비상금 ?계좌', sign: null, category: '비상금이체', priority: 10 },
+  { id: 2, txn_type: null, pattern: '고정비 ?계좌', sign: null, category: '고정비이체', priority: 20 },
+  { id: 3, txn_type: '펌뱅킹출금', pattern: '카드', sign: -1, category: '카드대금', priority: 30 },
+  { id: 4, txn_type: null, pattern: '대출 ?이자', sign: null, category: '주거비', priority: 40 },
+  { id: 5, txn_type: null, pattern: 'IRP|ISA|연금', sign: null, category: '저축', priority: 50 },
+  { id: 6, txn_type: null, pattern: '코인적립', sign: null, category: '저축', priority: 60 },
+  { id: 7, txn_type: null, pattern: '통장 ?이자', sign: null, category: '이자', priority: 70 },
+  { id: 8, txn_type: '이자입금', pattern: '.*', sign: null, category: '이자', priority: 80 },
+  { id: 9, txn_type: '자동이체', pattern: '.*', sign: null, category: '고정비', priority: 90 },
+  { id: 10, txn_type: null, pattern: '용돈', sign: -1, category: '용돈', priority: 75 },
+]);
+
+function fixtureRows(overrides = () => ({})) {
+  const statement = parseTossStatement(openXlsxFile(FIXTURE).sheet(0));
+  const records = toTransactionRecords(statement, ACCOUNTS);
+  classifyRecords(records, createClassifier({ rules: SEED_RULES }));
+  return records.map((record, index) => ({
+    ...record,
+    id: String(index + 1),
+    amount: String(record.amount),
+    balance: record.balance === null ? null : String(record.balance),
+    ...overrides(record),
+  }));
+}
+
+function sum(lines, field = 'total') {
+  return lines.reduce((total, line) => total + line[field], 0);
+}
+
+/** 항목 줄 합계 = 섹션 합계. 모든 섹션 · 모든 분류 · 모든 계좌 블록에 대해. */
+function assertLinesAddUp(result) {
+  assert.equal(sum(result.항목별.수입), result.수입.total, '수입');
+  assert.equal(sum(result.항목별.수입, 'count'), result.수입.count, '수입 건수');
+  assert.equal(sum(result.항목별.고정지출1), result.고정지출1.total, '고정지출1');
+  assert.equal(sum(result.항목별.고정지출1, 'count'), result.고정지출1.count, '고정지출1 건수');
+  assert.equal(sum(result.항목별.고정지출2), result.고정지출2.total, '고정지출2');
+  assert.equal(sum(result.항목별.고정지출2, 'count'), result.고정지출2.count, '고정지출2 건수');
+  assert.equal(sum(result.항목별.변동지출), result.변동지출.total, '변동지출');
+  assert.equal(sum(result.항목별.변동지출, 'count'), result.변동지출.count, '변동지출 건수');
+
+  // 분류 단위로도 맞는다(표는 분류마다 따로 그린다).
+  for (const name of ['수입', '고정지출1', '고정지출2']) {
+    for (const item of result[name].items) {
+      assert.equal(
+        sum(result.항목별[name].filter((line) => line.category === item.key)),
+        item.total,
+        `${name} ${item.key} 분류`,
+      );
+    }
+  }
+  assert.equal(
+    sum(result.항목별.변동지출.filter((line) => line.category === CARD_CATEGORY)),
+    result.변동지출.카드대금.total,
+  );
+  assert.equal(
+    sum(result.항목별.변동지출.filter((line) => line.category !== CARD_CATEGORY)),
+    result.변동지출.기타.total,
+  );
+
+  for (const block of result.계좌블록) {
+    assert.equal(sum(block.항목), block.집행.total, `${block.role} 집행`);
+    assert.equal(sum(block.항목, 'count'), block.집행.count, `${block.role} 집행 건수`);
+  }
+}
+
+test('fixture: 항목 줄의 합이 섹션 합계와 같고 검산은 그대로 통과한다', () => {
+  const result = aggregateMonthly({ yearMonth: '2026-08', accounts: ACCOUNTS, rows: fixtureRows() });
+  assertLinesAddUp(result);
+
+  // 항목 줄이 생기기 전과 같은 숫자(test/report-monthly.test.mjs 와 같은 값).
+  assert.equal(result.수입.total, 11480113);
+  assert.equal(result.고정지출1.total, -5150000);
+  assert.equal(result.고정지출2.total, 0);
+  assert.equal(result.변동지출.카드대금.total, -5090698);
+  assert.equal(result.변동지출.기타.total, -181280);
+  assert.equal(result.계좌간이동.total, -1500000);
+
+  const verification = verifyMonthlyReport(result);
+  assert.equal(verification.checked, true);
+  assert.equal(verification.ok, true);
+  assert.equal(verification.actual, -441865);
+});
+
+test('fixture: 저축 · 용돈 · 주거비가 적요별 항목 줄로 풀린다', () => {
+  const result = aggregateMonthly({ yearMonth: '2026-08', accounts: ACCOUNTS, rows: fixtureRows() });
+  const lines = (category) =>
+    result.항목별.고정지출1
+      .filter((line) => line.category === category)
+      .map((line) => [line.item, line.total, line.count]);
+
+  assert.deepEqual(lines('저축'), [
+    ['김철수 ISA', -1000000, 1],
+    ['홍길동 ISA', -1000000, 1],
+    ['철수 연금저축', -500000, 1],
+    ['길동 IRP', -350000, 1],
+    ['김철수 IRP', -300000, 1],
+    ['코인적립', -200000, 1],
+  ]);
+  assert.deepEqual(lines('용돈'), [
+    ['길동 용돈', -500000, 1],
+    ['철수 용돈', -500000, 1],
+  ]);
+  assert.deepEqual(lines('주거비'), [['대출 이자', -800000, 1]]);
+
+  // 카드대금은 카드사 이름이 항목이다(적요 표기가 달라도 모인다).
+  assert.deepEqual(
+    result.항목별.변동지출
+      .filter((line) => line.category === CARD_CATEGORY)
+      .map((line) => [line.item, line.count]),
+    [
+      ['삼성카드', 2],
+      ['현대카드', 1],
+      ['KB국민카드', 1],
+    ],
+  );
+  // 미분류 출금은 미분류 꼬리표로 적요가 항목이다.
+  assert.deepEqual(
+    result.항목별.변동지출
+      .filter((line) => line.category !== CARD_CATEGORY)
+      .map((line) => [line.category, line.item, line.total]),
+    [
+      ['미분류', '김철수', -170000],
+      ['미분류', '이영희', -7500],
+      ['미분류', '코웨이08월렌탈', -3780],
+    ],
+  );
+});
+
+test('저장된 항목이 적요를 이긴다 — 다른 적요도 같은 항목이면 한 줄이 된다', () => {
+  const rows = fixtureRows((record) =>
+    record.description === '김철수 ISA' || record.description === '홍길동 ISA'
+      ? { item: 'ISA' }
+      : record.description === '삼성카드주식회사'
+        ? { item: '생활비카드' }
+        : {},
+  );
+  const result = aggregateMonthly({ yearMonth: '2026-08', accounts: ACCOUNTS, rows });
+  assertLinesAddUp(result);
+
+  const isa = result.항목별.고정지출1.find((line) => line.item === 'ISA');
+  assert.deepEqual(isa, { category: '저축', item: 'ISA', total: -2000000, count: 2 });
+  // 카드대금에 항목을 정하면 카드사 묶음도 그 이름으로 간다.
+  assert.ok(result.변동지출.카드대금.issuers.some((issuer) => issuer.issuer === '생활비카드'));
+  assert.equal(result.종합정산.실현순증감, -441865);
+});
+
+// ── 허용 목록 ↔ 집계 ──────────────────────────────────────────────────────
+
+test('허용 목록은 집계가 칸을 가진 분류 전부이고 그 밖에는 없다', () => {
+  assert.deepEqual(
+    new Set(CLASSIFY_CATEGORIES),
+    new Set([
+      ...INCOME_CATEGORIES,
+      ...FIXED1_CATEGORIES,
+      ...FIXED2_CATEGORIES,
+      CARD_CATEGORY,
+      VARIABLE_CATEGORY,
+      ...Object.keys(TRANSFER_CATEGORIES),
+    ]),
+  );
+  assert.equal(new Set(CLASSIFY_CATEGORIES).size, CLASSIFY_CATEGORIES.length, '중복 없음');
+  // 보정 대상 이름(adjustments_target_valid)과 어긋나지 않는다.
+  for (const target of ['수입', '저축', '용돈', '주거비', '고정비', '비상금', '변동비']) {
+    assert.ok(CLASSIFY_CATEGORIES.includes(target), target);
+  }
+});
+
+test('허용된 분류는 부호와 무관하게 명시적인 칸에 들어간다', () => {
+  const sections = new Set(Object.values(SECTIONS));
+  for (const category of CLASSIFY_CATEGORIES) {
+    for (const amount of ['-12345', '0', '12345']) {
+      const place = placeMainRow({ category, amount, is_transfer: false });
+      assert.equal(place.explicit, true, `${category} ${amount}`);
+      assert.ok(sections.has(place.section), `${category} ${amount} -> ${place.section}`);
+    }
+  }
+
+  // 이 테스트가 빈 검사가 아니라는 확인 — 목록 밖의 분류는 명시적인 칸이 없다.
+  assert.equal(placeMainRow({ category: '손수정', amount: '-1' }).explicit, false);
+});
+
+test('출금 분류마다 기대한 칸으로 간다', () => {
+  const expected = {
+    수입: SECTIONS.income,
+    이자: SECTIONS.income,
+    저축: SECTIONS.fixed1,
+    용돈: SECTIONS.fixed1,
+    주거비: SECTIONS.fixed1,
+    고정비: SECTIONS.fixed2,
+    비상금: SECTIONS.fixed2,
+    카드대금: SECTIONS.card,
+    변동비: SECTIONS.variable,
+    고정비이체: SECTIONS.transfer,
+    비상금이체: SECTIONS.transfer,
+  };
+  assert.deepEqual(Object.keys(expected).sort(), [...CLASSIFY_CATEGORIES].sort());
+  for (const [category, section] of Object.entries(expected)) {
+    assert.equal(placeMainRow({ category, amount: '-1' }).section, section, category);
+  }
+});
+
+test('모든 허용 분류 × 양쪽 부호로 집계해도 항목 줄과 항등식이 맞는다', () => {
+  const rows = [];
+  let id = 0;
+  for (const category of CLASSIFY_CATEGORIES) {
+    for (const amount of [-7000, 3000]) {
+      id += 1;
+      rows.push({
+        id: String(id),
+        account_id: 1,
+        txn_at: `2026-08-${String((id % 27) + 1).padStart(2, '0')}T00:00:00+09:00`,
+        description: `${category} 항목 ${id}`,
+        txn_type: '자동이체',
+        amount: String(amount),
+        balance: null,
+        category,
+        is_transfer: false,
+      });
+    }
+  }
+  const result = aggregateMonthly({ yearMonth: '2026-08', accounts: ACCOUNTS, rows });
+  assertLinesAddUp(result);
+
+  const sumOfAmounts = rows.reduce((total, row) => total + Number(row.amount), 0);
+  assert.equal(result.종합정산.실현순증감, sumOfAmounts);
+  assert.equal(
+    result.종합정산.수입 +
+      result.종합정산.고정지출1 +
+      result.종합정산.고정지출2 +
+      result.종합정산.변동지출 +
+      result.종합정산.계좌간이동,
+    result.종합정산.실현순증감,
+  );
+  // 변동지출 기타에는 사람이 고른 '변동비' 출금만 있다 — 목록 밖 갈래로 샌 것이 없다.
+  assert.deepEqual(
+    [...new Set(result.항목별.변동지출.filter((line) => line.category !== CARD_CATEGORY).map((line) => line.category))],
+    [VARIABLE_CATEGORY],
+  );
+});
