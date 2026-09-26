@@ -64,8 +64,20 @@ test('올바른 요청은 정규화된 키 · 항목으로 통과한다', () => 
       direction: 'out',
       category: '고정비',
       item: '정수기 렌탈',
+      stripMonth: false,
     },
   });
+});
+
+test('stripMonth 는 boolean 만 받는다 — 생략하면 false, boolean 이 아니면 거부한다', () => {
+  assert.equal(parseClassifyRequest(valid()).value.stripMonth, false);
+  assert.equal(parseClassifyRequest(valid({ stripMonth: true })).value.stripMonth, true);
+  assert.equal(parseClassifyRequest(valid({ stripMonth: false })).value.stripMonth, false);
+  for (const bad of ['true', 1, 0, null, {}, []]) {
+    const parsed = parseClassifyRequest(valid({ stripMonth: bad }));
+    assert.equal(parsed.ok, false, String(bad));
+    assert.equal(parsed.error, 'badRequest');
+  }
 });
 
 test('허용 목록 밖의 분류는 거부한다', () => {
@@ -394,6 +406,96 @@ test('앞으로도로 만든 매핑은 다음 업로드에 분류와 항목을 �
     await client.query('DELETE FROM transactions');
     await importFixture(client);
     assert.deepEqual(await rowsOf(client, '코웨이08월렌탈'), [['2026-08', '고정비', '정수기', 'map']]);
+  });
+});
+
+// ── 월마다 바뀌는 적요(2026-09) ───────────────────────────────────────────
+//
+// 사용자 문제: "코웨이08월렌탈의 경우 월별로 코웨이09월렌탈, 코웨이10월렌탈
+// 바뀌게 되는 고정비야." fixture 의 2026-08 행이 정확히 '코웨이08월렌탈' 이다
+// (test/classify-engine.test.mjs 의 fixture 주석 참고).
+
+test('체크박스 켠 앞으로도: 월 토큰을 지운 키로 매핑을 저장하고, 원문이 다른 다음 달 행도 재분류 한 번으로 자동 분류된다', async (t) => {
+  await withScratchDatabase(t, 'classify_stripmonth', async (client) => {
+    await importFixture(client);
+    // 다음 달(2026-09)의 같은 고정비. 적요 원문이 다르다(09월) — import 시점에는
+    // 아직 이 매핑이 없으니 미분류로 저장된다.
+    await insertTransactions(client, [
+      extraRecord(1, { description: '코웨이09월렌탈', txn_type: 'CMS출금', amount: -3780 }),
+    ]);
+    assert.deepEqual(await rowsOf(client, '코웨이09월렌탈'), [['2026-09', null, null, null]]);
+
+    // 화면에서 "월마다 문구가 바뀌는 항목이에요" 체크박스를 켜고 앞으로도 저장.
+    const outcome = await applyClassification(
+      client,
+      valid({ scope: 'always', key: '코웨이08월렌탈', category: '고정비', item: '정수기', stripMonth: true }),
+    );
+    assert.deepEqual(outcome, { ok: true, updated: 1, mapped: true });
+
+    // 매핑의 키는 원문(코웨이08월렌탈)이 아니라 지운 키(코웨이렌탈)다.
+    assert.deepEqual(await mapRows(client), [['코웨이렌탈', 'out', '고정비', '정수기']]);
+
+    // 이 달(2026-08)의 그 묶음은 바로 반영된다.
+    assert.deepEqual(await rowsOf(client, '코웨이08월렌탈'), [['2026-08', '고정비', '정수기', 'map']]);
+
+    // 09월 행은 원문이 달라 이 UPDATE 로는 안 닿는다 — 아직 미분류다.
+    assert.deepEqual(await rowsOf(client, '코웨이09월렌탈'), [['2026-09', null, null, null]]);
+
+    // 재분류(classifyStored) 한 번으로, 사람 손을 더 대지 않고 09월 행이 잡힌다.
+    const result = await classifyStored(client);
+    assert.equal(result.classified, 1);
+    assert.deepEqual(await rowsOf(client, '코웨이09월렌탈'), [['2026-09', '고정비', '정수기', 'map']]);
+
+    // 다음 업로드(파싱 -> classifyRecords)도 같은 분류기를 타므로 10월 적요도
+    // 사람이 다시 고를 필요 없이 바로 분류된다.
+    const classifier = await loadClassifier(client);
+    const future = classifier.classify({ description: '코웨이10월렌탈', txn_type: 'CMS출금', amount: -3780 });
+    assert.deepEqual([future.category, future.source, future.item], ['고정비', 'merchant_map', '정수기']);
+
+    // /report 에는 지운 키가 아니라 사람이 고른 항목 이름이 그대로 나온다(양쪽 달).
+    const augReport = await buildMonthlyReport(client, '2026-08');
+    assert.deepEqual(
+      augReport.항목별.고정지출2.find((line) => line.item === '정수기'),
+      { category: '고정비', item: '정수기', direction: 'out', total: -3780, count: 1 },
+    );
+    const sepReport = await buildMonthlyReport(client, '2026-09');
+    assert.deepEqual(
+      sepReport.항목별.고정지출2.find((line) => line.item === '정수기'),
+      { category: '고정비', item: '정수기', direction: 'out', total: -3780, count: 1 },
+    );
+    assert.equal(verifyMonthlyReport(augReport).ok, true);
+    // 9월 행은 이 테스트가 잔액 없이 끼워 넣은 것이라 검산은 스킵된다(잔액 결손).
+    assert.equal(verifyMonthlyReport(sepReport).ok, null);
+    assert.equal(verifyMonthlyReport(sepReport).reason, 'balanceMissing');
+  });
+});
+
+test('체크박스를 켰는데 적요에 월 토큰이 없으면 거부하고 매핑을 만들지 않는다', async (t) => {
+  await withScratchDatabase(t, 'classify_stripmonth_reject', async (client) => {
+    await importFixture(client);
+    // '이영희' 는 fixture 에 있고 월 토큰이 없는 평범한 적요다.
+    const outcome = await applyClassification(
+      client,
+      valid({ scope: 'always', key: '이영희', direction: 'out', category: '고정비', item: '뭔가', stripMonth: true }),
+    );
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.error, 'noMonthToken');
+    assert.equal(outcome.message, CLASSIFY_ERROR_MESSAGES.noMonthToken);
+    assert.equal((await client.query('SELECT count(*)::int AS n FROM merchant_map')).rows[0].n, 0);
+    // 그 행도 바뀌지 않았다 — 거부는 아무것도 만들지도 바꾸지도 않는다.
+    assert.deepEqual(await rowsOf(client, '이영희'), [['2026-08', null, null, null]]);
+  });
+});
+
+test('체크박스를 끄면 월 토큰이 있어도 예전처럼 원문 키로 저장한다', async (t) => {
+  await withScratchDatabase(t, 'classify_stripmonth_off', async (client) => {
+    await importFixture(client);
+    const outcome = await applyClassification(
+      client,
+      valid({ scope: 'always', key: '코웨이08월렌탈', category: '고정비', item: '정수기' }), // stripMonth 없음(기본 false)
+    );
+    assert.deepEqual(outcome, { ok: true, updated: 1, mapped: true });
+    assert.deepEqual(await mapRows(client), [['코웨이08월렌탈', 'out', '고정비', '정수기']]);
   });
 });
 
