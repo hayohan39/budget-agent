@@ -1,15 +1,21 @@
 "use client";
 
-// /classify 의 입력 조각. 서버로 보내는 것은 달 · 묶음 키(정규화한 적요) ·
+// /classify 의 입력 조각. 서버로 보내는 것은 달 · 묶음 키(정규화한 적요) · 방향 ·
 // 분류 · 항목 · 범위뿐이다. 행 id · 건수 · 금액은 보내지 않는다 — 서버가 그 달의
-// 행을 직접 다시 읽어 묶음을 찾는다(lib/classify/manual.mjs).
+// 행을 직접 다시 읽어 묶음을 찾는다(lib/classify/manual.mjs). 방향도 서버가 저장된
+// 금액에서 다시 계산해 맞춰 본다.
 //
 // console 호출이 이 파일에 없다. 실패하면 서버가 준 고정 문장만 보여 준다.
 import { useRouter } from "next/navigation";
 import { useId, useState, type FormEvent } from "react";
 
+/** 묶음의 방향. 매핑에는 방향 구분 전의 `any` 가 더 있다. */
+export type Direction = "in" | "out";
+export type MappingDirection = Direction | "any";
+
 export type ClassifyGroup = {
   key: string;
+  direction: Direction;
   count: number;
   total: number;
   unclassified: number;
@@ -24,6 +30,7 @@ export type ClassifyGroup = {
 
 export type Mapping = {
   key: string;
+  direction: MappingDirection;
   category: string;
   item: string | null;
   updatedAt: string;
@@ -34,6 +41,30 @@ const INPUT =
   "rounded-md border border-zinc-300 bg-transparent px-2 py-1 text-sm dark:border-zinc-700";
 const BUTTON =
   "rounded-md border border-zinc-300 px-3 py-1 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900";
+
+/** lib/classify/direction.mjs 의 DIRECTION_LABELS 와 같은 이름. */
+const DIRECTION_TEXT: Record<string, string> = {
+  in: "입금",
+  out: "출금",
+  any: "방향 무관",
+};
+
+const DIRECTION_BADGE: Record<string, string> = {
+  in: "bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300",
+  out: "bg-rose-50 text-rose-800 dark:bg-rose-950/40 dark:text-rose-300",
+  any: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
+};
+
+function DirectionBadge({ direction }: { direction: string }) {
+  return (
+    <span
+      data-testid="direction"
+      className={`mr-2 inline-block rounded px-1.5 py-0.5 align-middle text-xs font-normal ${DIRECTION_BADGE[direction] ?? DIRECTION_BADGE.any}`}
+    >
+      {DIRECTION_TEXT[direction] ?? DIRECTION_TEXT.any}
+    </span>
+  );
+}
 
 const SOURCE_TEXT: Record<string, string> = {
   rule: "규칙",
@@ -106,14 +137,23 @@ function CategorySelect({
   );
 }
 
+/**
+ * 한 묶음의 입력.
+ *
+ * "기타로 처리" 는 분류 선택 없이 `otherCategory`(기타)로 바로 보낸다. 범위(이번만 ·
+ * 앞으로도)와 항목은 폼에서 고른 값을 그대로 쓴다 — 앞으로도면 이 묶음의 방향으로
+ * 기타 매핑이 저장된다.
+ */
 export function GroupForm({
   month,
   group,
   categories,
+  otherCategory,
 }: {
   month: string;
   group: ClassifyGroup;
   categories: string[];
+  otherCategory: string;
 }) {
   const router = useRouter();
   const [category, setCategory] = useState(
@@ -126,15 +166,21 @@ export function GroupForm({
   // id 에 적요를 넣지 않는다(DOM id 에 한글·공백이 섞이면 label 연결이 깨진다).
   const uid = useId();
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (category === "") {
+  async function send(chosen: string) {
+    if (chosen === "") {
       setStatus({ kind: "error", text: "분류를 골라 주세요." });
       return;
     }
     setStatus({ kind: "busy" });
     try {
-      const { ok, data } = await post("/api/classify", { scope, month, key: group.key, category, item });
+      const { ok, data } = await post("/api/classify", {
+        scope,
+        month,
+        key: group.key,
+        direction: group.direction,
+        category: chosen,
+        item,
+      });
       if (!ok) {
         setStatus({ kind: "error", text: failureText(data) });
         return;
@@ -143,10 +189,16 @@ export function GroupForm({
         kind: "done",
         text: `${String(data.updated ?? 0)}건에 적용했습니다${data.mapped === true ? " · 매핑 저장" : ""}.`,
       });
+      if (chosen !== category) setCategory(chosen);
       router.refresh();
     } catch {
       setStatus({ kind: "error", text: "서버에 연결하지 못했습니다." });
     }
+  }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void send(category);
   }
 
   const current = group.mixed
@@ -162,7 +214,10 @@ export function GroupForm({
       className="flex flex-col gap-2 rounded-md border border-zinc-300 p-3 text-sm dark:border-zinc-700"
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="font-medium break-all">{group.key}</p>
+        <p className="font-medium break-all">
+          <DirectionBadge direction={group.direction} />
+          {group.key}
+        </p>
         <p className="tabular-nums text-zinc-600 dark:text-zinc-400">
           {group.count}건 · {FLOW.format(group.total)}원
         </p>
@@ -224,6 +279,17 @@ export function GroupForm({
         <button type="submit" className={BUTTON} disabled={status.kind === "busy"}>
           {status.kind === "busy" ? "저장 중…" : "적용"}
         </button>
+        {categories.includes(otherCategory) ? (
+          <button
+            type="button"
+            className={BUTTON}
+            disabled={status.kind === "busy"}
+            onClick={() => void send(otherCategory)}
+            title="따로 나눌 필요가 없는 거래를 ‘기타’로 분류합니다. 고른 적용 범위를 따릅니다."
+          >
+            기타로 처리
+          </button>
+        ) : null}
       </div>
       <StatusLine status={status} />
     </form>
@@ -249,6 +315,7 @@ export function MappingRow({ mapping, categories }: { mapping: Mapping; categori
       const { ok, data } = await post("/api/classify/mappings", {
         action: "update",
         key: mapping.key,
+        direction: mapping.direction,
         category,
         item,
       });
@@ -265,19 +332,32 @@ export function MappingRow({ mapping, categories }: { mapping: Mapping; categori
   }
 
   async function remove() {
-    if (!window.confirm("이 매핑을 지울까요? 이 매핑으로 분류된 거래는 규칙으로 다시 분류됩니다.")) {
+    const scopeText =
+      mapping.direction === "any"
+        ? "입금 · 출금 중 따로 저장한 매핑이 없는 쪽"
+        : `${DIRECTION_TEXT[mapping.direction]} 거래`;
+    if (
+      !window.confirm(
+        `이 매핑(${DIRECTION_TEXT[mapping.direction] ?? ""})을 지울까요? ${scopeText}만 다시 분류됩니다.`,
+      )
+    ) {
       return;
     }
     setStatus({ kind: "busy" });
     try {
-      const { ok, data } = await post("/api/classify/mappings", { action: "delete", key: mapping.key });
+      const { ok, data } = await post("/api/classify/mappings", {
+        action: "delete",
+        key: mapping.key,
+        direction: mapping.direction,
+      });
       if (!ok) {
         setStatus({ kind: "error", text: failureText(data) });
         return;
       }
       setStatus({
         kind: "done",
-        text: `지웠습니다 · 규칙으로 ${String(data.reclassified ?? 0)}건, 미분류 ${String(data.unclassified ?? 0)}건.`,
+        // 방향 매핑을 지우면 같은 적요의 방향 무관 매핑으로 돌아갈 수도 있어 '규칙으로' 라고 하지 않는다.
+        text: `지웠습니다 · 다시 분류 ${String(data.reclassified ?? 0)}건, 미분류 ${String(data.unclassified ?? 0)}건.`,
       });
       router.refresh();
     } catch {
@@ -293,7 +373,10 @@ export function MappingRow({ mapping, categories }: { mapping: Mapping; categori
       className="flex flex-col gap-2 rounded-md border border-zinc-300 p-3 text-sm dark:border-zinc-700"
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="font-medium break-all">{mapping.key}</p>
+        <p className="font-medium break-all">
+          <DirectionBadge direction={mapping.direction} />
+          {mapping.key}
+        </p>
         <p className="text-xs text-zinc-500">
           {mapping.category} · {mapping.item ?? "(적요 그대로)"} · {updated}
         </p>

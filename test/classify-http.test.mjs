@@ -21,7 +21,7 @@ function request(body, { origin = `https://${HOST}`, type = 'application/json', 
   });
 }
 
-/** 가짜 DB. 쿼리를 기록하고, 그 달에는 `코인적립` 한 건만 있다. */
+/** 가짜 DB. 쿼리를 기록하고, 그 달에는 `코인적립` 출금 한 건만 있다. */
 function fakeClient() {
   const queries = [];
   return {
@@ -29,8 +29,9 @@ function fakeClient() {
     async query(text, values = []) {
       queries.push({ text, values });
       if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(text)) return { rows: [], rowCount: 0 };
-      if (text.startsWith('SELECT id, description FROM transactions WHERE year_month')) {
-        return { rows: [{ id: '41', description: '코인적립' }], rowCount: 1 };
+      if (text.startsWith('SELECT pg_advisory_xact_lock(')) return { rows: [{}], rowCount: 1 };
+      if (text.startsWith('SELECT id, description, amount FROM transactions WHERE year_month')) {
+        return { rows: [{ id: '41', description: '코인적립', amount: '-200000' }], rowCount: 1 };
       }
       if (text.includes('UPDATE transactions')) return { rows: [], rowCount: 1 };
       if (text.includes('INSERT INTO merchant_map')) return { rows: [], rowCount: 1 };
@@ -61,6 +62,7 @@ const GOOD = Object.freeze({
   scope: 'once',
   month: '2026-08',
   key: '코인적립',
+  direction: 'out',
   category: '저축',
   item: '코인',
 });
@@ -128,6 +130,40 @@ test('classify: 모르는 분류 · 틀린 달 · 제어 문자 · 긴 항목은
   }
 });
 
+test('classify: 방향은 in · out 만 받는다 — any · 빈 값 · 모르는 값은 400, 되비추지 않고 DB 에 닿지 않는다', async () => {
+  for (const direction of ['any', undefined, null, '', 'IN', 'both', "out' OR 1=1", 1, ['out']]) {
+    const d = deps();
+    const { status, body } = await read(await handleClassifyPost(request({ ...GOOD, direction }), d.value));
+    assert.equal(status, 400, String(direction));
+    assert.equal(body.message, '입금 · 출금 구분이 올바르지 않습니다.');
+    assert.ok(!JSON.stringify(body).includes('OR 1=1'));
+    assert.equal(d.calls.withClient, 0);
+  }
+});
+
+test('classify: 그 달에 그 방향의 묶음이 없으면 404 이고 아무것도 쓰지 않는다', async () => {
+  // 코인적립은 출금뿐이다. 입금 묶음으로 보내면 서버가 금액에서 방향을 다시 보고 거부한다.
+  const d = deps();
+  const { status } = await read(
+    await handleClassifyPost(request({ ...GOOD, direction: 'in', scope: 'always' }), d.value),
+  );
+  assert.equal(status, 404);
+  assert.ok(!d.client.queries.some((query) => /UPDATE transactions|INSERT INTO/.test(query.text)));
+});
+
+test('classify: 앞으로도는 묶음의 방향으로 매핑을 저장한다(파라미터로)', async () => {
+  const d = deps();
+  const { status } = await read(await handleClassifyPost(request({ ...GOOD, scope: 'always' }), d.value));
+  assert.equal(status, 200);
+  const insert = d.client.queries.find((query) => query.text.includes('INSERT INTO merchant_map'));
+  assert.deepEqual(insert.values, ['코인적립', 'out', '저축', '코인']);
+  assert.match(insert.text, /ON CONFLICT \(description, direction\)/);
+  // BEGIN 바로 다음이 키 단위 잠금이다. 키는 파라미터로만 나간다.
+  assert.equal(d.client.queries[0].text, 'BEGIN');
+  assert.match(d.client.queries[1].text, /^SELECT pg_advisory_xact_lock\(\$1::int4, hashtext\(\$2::text\)\)$/);
+  assert.equal(d.client.queries[1].values[1], '코인적립');
+});
+
 test('classify: 없는 키는 404 이고 키를 되비추지 않는다', async () => {
   const d = deps();
   const { status, body } = await read(
@@ -172,19 +208,25 @@ test('classify: DB 연결 실패는 503 이고 원인 메시지를 흘리지 않
 
 test('mappings: 없는 매핑 삭제 · 수정은 404', async () => {
   for (const payload of [
-    { action: 'delete', key: '코인적립' },
-    { action: 'update', key: '코인적립', category: '저축', item: null },
+    { action: 'delete', key: '코인적립', direction: 'out' },
+    { action: 'delete', key: '코인적립', direction: 'any' },
+    { action: 'update', key: '코인적립', direction: 'in', category: '저축', item: null },
   ]) {
     const d = deps();
     const { status } = await read(await handleMappingPost(request(payload), d.value));
     assert.equal(status, 404);
+    const write = d.client.queries.find((query) => /(DELETE FROM|UPDATE) merchant_map/.test(query.text));
+    assert.ok(write.values.includes(payload.direction), '방향으로 한 행만 가리킨다');
   }
 });
 
 test('mappings: 모르는 분류 · 모르는 동작은 400', async () => {
   for (const payload of [
-    { action: 'update', key: '코인적립', category: '손수정' },
-    { action: 'truncate', key: '코인적립' },
+    { action: 'update', key: '코인적립', direction: 'out', category: '손수정' },
+    { action: 'truncate', key: '코인적립', direction: 'out' },
+    { action: 'delete', key: '코인적립' },
+    { action: 'delete', key: '코인적립', direction: 'sideways' },
+    { action: 'update', key: '코인적립', direction: null, category: '저축' },
   ]) {
     const d = deps();
     const { status } = await read(await handleMappingPost(request(payload), d.value));

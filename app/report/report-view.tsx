@@ -49,18 +49,30 @@ export type Verification = ReturnType<typeof verifyMonthlyReport>;
  * `fixedSection`) JS 쪽 추론이 `any` 로 끝난다. 화면이 읽는 모양을 여기 적어
  * 두고 그 타입으로 받는다 — 집계가 바뀌면 이 줄이 먼저 어긋난다.
  */
-type SectionItem = { key: string; total: number; count: number; tag?: string };
+type SectionItem = { key: string; total: number; count: number; tag?: string; flow?: string };
 
-/** `항목별` 의 한 줄. (분류, 항목) 단위다. */
-type Line = { category: string; item: string; total: number; count: number };
+/**
+ * `항목별` 의 한 줄. (분류, 항목, 방향) 단위다. 같은 항목의 입금과 출금은 서로
+ * 다른 줄이다 — 한 줄 안에서 부호가 섞이지 않는다.
+ */
+type Line = { category: string; item: string; direction: "in" | "out"; total: number; count: number };
 
-/** 항목 줄 -> 표의 한 줄. 분류가 표 이름과 다르면 작은 꼬리표로 붙인다. */
-function linesAsItems(lines: Line[], kind?: string): SectionItem[] {
+const DIRECTION_TEXT: Record<Line["direction"], string> = { in: "입금", out: "출금" };
+
+/**
+ * 항목 줄 -> 표의 한 줄. 분류가 표 이름과 다르면 작은 꼬리표로 붙인다.
+ *
+ * 방향이 그 표의 기본 방향(`natural` — 수입 표는 입금, 지출 표는 출금)과 다르면
+ * 방향 꼬리표를 붙인다. 같은 항목 이름의 입금 줄과 출금 줄이 한 표에 나란히
+ * 있을 때(예: 수입으로 고른 적요의 반환 출금) 둘을 구별하게 해 준다.
+ */
+function linesAsItems(lines: Line[], kind?: string, natural: Line["direction"] = "out"): SectionItem[] {
   return lines.map((line) => ({
     key: line.item,
     total: line.total,
     count: line.count,
     tag: kind !== undefined && line.category === kind ? undefined : line.category,
+    flow: line.direction === natural ? undefined : DIRECTION_TEXT[line.direction],
   }));
 }
 
@@ -205,7 +217,7 @@ function KindTable({
           </tr>
         ) : (
           items.map((item, index) => (
-            <tr key={`${item.tag ?? ""}\u001f${item.key}`}>
+            <tr key={`${item.tag ?? ""}\u001f${item.key}\u001f${item.flow ?? ""}`}>
               {index === 0 ? (
                 <th scope="row" rowSpan={items.length} className={`${CELL} whitespace-nowrap text-center`}>
                   {kind}
@@ -217,6 +229,11 @@ function KindTable({
                   {item.tag !== undefined ? (
                     <span className="mr-1 rounded bg-zinc-100 px-1 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
                       {item.tag}
+                    </span>
+                  ) : null}
+                  {item.flow !== undefined ? (
+                    <span className="mr-1 rounded bg-sky-50 px-1 text-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+                      {item.flow}
                     </span>
                   ) : null}
                   {item.count}건
@@ -267,7 +284,7 @@ function AccountTable({
           </tr>
         ) : (
           lines.map((line, index) => (
-            <tr key={`${line.category}\u001f${line.item}`}>
+            <tr key={`${line.category}\u001f${line.item}\u001f${line.direction}`}>
               {index === 0 ? (
                 <th scope="row" rowSpan={lines.length} className={`${CELL} whitespace-nowrap text-center`}>
                   {block.nickname}
@@ -501,7 +518,7 @@ export function ReportView({
         <div className="flex flex-col gap-4">
           <KindTable
             kind="수입"
-            items={linesAsItems(lines.수입, "수입")}
+            items={linesAsItems(lines.수입, "수입", "in")}
             total={report.수입.total}
             tone="income"
             caption={`${report.yearMonth} 수입`}
@@ -685,6 +702,8 @@ export function ReportView({
         </p>
         <p className="text-xs text-zinc-500">
           미분류 출금은 위 변동비 표에 ‘미분류’ 꼬리표로, 미분류 입금은 수입 표에 나옵니다.
+          ‘기타’로 처리한 거래는 분류된 것으로 세며, 출금은 변동비 표에 ‘기타’ 꼬리표로,
+          입금은 수입 표에 ‘기타’ 꼬리표로 나옵니다.
         </p>
       </section>
     </div>
