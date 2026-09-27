@@ -467,7 +467,7 @@ export function ReportView({
   const 비상금 = itemTotal(fixed2, "비상금") + itemTotal(moves, "비상금");
   const 기타이체 = itemTotal(moves, "기타");
 
-  const summaryRows: Array<{ label: string; value: number | null; note?: string }> = [
+  const summaryRows: Array<{ label: string; value: number; note?: string }> = [
     { label: "수입", value: report.종합정산.수입 },
     { label: "저축", value: itemTotal(fixed1, "저축") },
     { label: "용돈", value: itemTotal(fixed1, "용돈") },
@@ -475,8 +475,6 @@ export function ReportView({
     { label: "고정비", value: 고정비, note: "계좌 이체 포함" },
     { label: "비상금", value: 비상금, note: "계좌 이체 포함" },
     { label: "변동비", value: report.종합정산.변동지출 },
-    // 원본에 있지만 이 앱이 추적하지 않는 줄. 지어내지 않고 빈 칸으로 둔다.
-    { label: "현금 보유", value: null, note: "추적하지 않습니다" },
   ];
 
   // 목적지를 모르는 이체. 0 이면 줄을 만들지 않고, 값이 있으면 반드시 보인다 —
@@ -485,7 +483,7 @@ export function ReportView({
     summaryRows.push({ label: "기타 이체", value: 기타이체, note: "목적지 미확인" });
   }
 
-  const shown = summaryRows.reduce((sum, item) => sum + (item.value ?? 0), 0);
+  const shown = summaryRows.reduce((sum, item) => sum + item.value, 0);
   // 합계는 집계가 낸 값(실현순증감 = 메인 계좌 거래 금액의 합)을 그대로 쓴다.
   // 위 줄들의 합과 어긋나면 표가 무언가를 빠뜨린 것이므로 차액을 드러낸다
   // (조용히 맞추지 않는다).
@@ -595,7 +593,7 @@ export function ReportView({
                 <SummaryRow
                   key={item.label}
                   label={item.label}
-                  value={item.value === null ? "—" : flow(item.value)}
+                  value={flow(item.value)}
                   note={item.note}
                 />
               ))}
