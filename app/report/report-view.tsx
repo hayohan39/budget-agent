@@ -446,12 +446,16 @@ function AccountTable({
           label="잔액"
           value={balance?.derived === true ? plain(balance.closing) : "—"}
           tone={tone}
+          // '계좌 · 금고 제외' 는 잔액 숫자를 설명하는 말이라 숫자가 있을 때(derived)만
+          // 붙인다. 숫자가 '—' 이면 그 이유를, 잔액 정보가 없으면 아무것도 붙이지 않는다.
           note={
-            balance === undefined || balance.derived
-              ? hasVault
-                ? "계좌 · 금고 제외"
-                : undefined
-              : `(${balanceReasonText(balance.reason)})`
+            balance === undefined
+              ? undefined
+              : balance.derived
+                ? hasVault
+                  ? "계좌 · 금고 제외"
+                  : undefined
+                : `(${balanceReasonText(balance.reason)})`
           }
         />
       </tbody>
