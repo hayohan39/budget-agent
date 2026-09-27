@@ -17,6 +17,16 @@
 //      원본에서는 이 잔차를 회색 `보정` 칸에 손으로 적어 맞췄다. 이 화면은
 //      그 자리에 **검산 차액**을 놓는다. 0 이 아니면 덮지 않고 드러낸다.
 //
+// 종합정산 표에 있던 `수입 보정` · `저축 보정` · `비상금 보정` · `변동비 보정(±)`
+// 줄은 **없앴다**(2026-09, 사용자 요청: "수동으로 기입할 때 생겼던 것이라 이제
+// 필요 없다"). 값을 넣는 화면이 한 번도 없어 늘 0 이었다. 종합정산의 합계는
+// 곧 실현순증감이고, 검산은 원래부터 그 값으로 한다(lib/report/verify.mjs).
+//
+// 가운데 열의 계좌 표(고정비 · 비상금)는 머리에 **`고정비 계좌` · `비상금 계좌`**
+// 줄을 단다. 왼쪽 열에도 메인 계좌에서 바로 나간 `고정비` 분류 표가 있을 수 있어,
+// 머리 없이는 '고정비' 표가 두 개로 보였다(사용자 보고). 메인 계좌 표에는 머리를
+// 달지 않는다(사용자 요청).
+//
 // ── 부호 ──────────────────────────────────────────────────────────────────
 //
 // 저장된 부호 규약(입금 + / 출금 −)을 **그대로 보여 준다.** 화면에서 지출을
@@ -252,6 +262,9 @@ function KindTable({
 /**
  * 원본 중앙 그룹의 계좌 표.
  *
+ * 맨 위에 `고정비 계좌` · `비상금 계좌` 머리 줄을 둔다 — 이 아래 줄은 전부 그
+ * 계좌의 거래라는 표시다(왼쪽 열 메인 계좌의 `고정비` 분류 표와 헷갈리지 않게).
+ *
  * 원본 순서: 입금 → 항목 → 합계(집행) → 보정 → 잔액.
  * `보정` 자리에는 실거래로 잡히는 **이자**가 온다. 그리고 원본에는 없던
  * `순증감` 을 한 줄 더 둔다 — 이자가 이 계좌의 집행을 상계한 값이다.
@@ -266,10 +279,17 @@ function AccountTable({
   const tone: keyof typeof TONE = block.role === "fixed" ? "fixed" : "emergency";
   const lines = block.항목 as Line[];
 
+  const title = `${block.nickname} 계좌`;
+
   return (
-    <table className={BOX}>
-      <caption className="sr-only">{block.nickname} 계좌</caption>
+    <table className={BOX} data-testid="account-table">
+      <caption className="sr-only">{title}</caption>
       <thead>
+        <tr className={TONE[tone]}>
+          <th scope="colgroup" colSpan={3} className={`${CELL} text-left text-sm font-semibold`}>
+            {title}
+          </th>
+        </tr>
         <Head3 />
       </thead>
       <tbody>
@@ -354,18 +374,6 @@ function itemTotal(items: SectionItem[], key: string): number {
   return items.find((item) => item.key === key)?.total ?? 0;
 }
 
-/** 그 대상의 보정 합계. `sign` 을 주면 그 부호인 것만 더한다. */
-function adjustmentTotal(
-  items: MonthlyReport["보정"]["items"],
-  target: string,
-  sign?: 1 | -1,
-): number {
-  return items
-    .filter((item) => item.target === target)
-    .filter((item) => sign === undefined || (sign === 1 ? item.amount > 0 : item.amount < 0))
-    .reduce((sum, item) => sum + item.amount, 0);
-}
-
 /** 검산 결과. 어긋났다면 표 위에서 가장 먼저 보여야 한다. */
 export function VerifyBanner({
   verification,
@@ -415,7 +423,7 @@ export function VerifyBanner({
       </dl>
       <p className="mt-3 text-sm text-zinc-700 dark:text-zinc-300">
         두 값은 서로 다른 컬럼(거래 금액 · 거래 후 잔액)에서 나옵니다. 어긋났다면
-        거래가 빠졌거나 파싱이 어긋난 신호입니다. <strong>보정으로 덮지 마세요.</strong>
+        거래가 빠졌거나 파싱이 어긋난 신호입니다. <strong>손으로 값을 맞춰 덮지 마세요.</strong>
       </p>
     </section>
   );
@@ -432,7 +440,6 @@ export function ReportView({
   const fixed1 = report.고정지출1.items as SectionItem[];
   const fixed2 = report.고정지출2.items as SectionItem[];
   const moves = report.계좌간이동.items as SectionItem[];
-  const adjustments = report.보정.items;
   const card = report.변동지출.카드대금;
   const lines = report.항목별 as Record<"수입" | "고정지출1" | "고정지출2" | "변동지출", Line[]>;
   const mainBalance = report.계좌별잔액변화.find((entry) => entry.role === "main");
@@ -462,36 +469,27 @@ export function ReportView({
 
   const summaryRows: Array<{ label: string; value: number | null; note?: string }> = [
     { label: "수입", value: report.종합정산.수입 },
-    { label: "수입 보정", value: adjustmentTotal(adjustments, "수입") },
     { label: "저축", value: itemTotal(fixed1, "저축") },
-    { label: "저축 보정", value: adjustmentTotal(adjustments, "저축") },
     { label: "용돈", value: itemTotal(fixed1, "용돈") },
     { label: "주거비", value: itemTotal(fixed1, "주거비") },
     { label: "고정비", value: 고정비, note: "계좌 이체 포함" },
     { label: "비상금", value: 비상금, note: "계좌 이체 포함" },
-    { label: "비상금 보정", value: adjustmentTotal(adjustments, "비상금") },
     { label: "변동비", value: report.종합정산.변동지출 },
-    { label: "변동비 보정(+)", value: adjustmentTotal(adjustments, "변동비", 1) },
-    { label: "변동비 보정(-)", value: adjustmentTotal(adjustments, "변동비", -1) },
     // 원본에 있지만 이 앱이 추적하지 않는 줄. 지어내지 않고 빈 칸으로 둔다.
     { label: "현금 보유", value: null, note: "추적하지 않습니다" },
   ];
 
-  // 원본에 자리가 없는 보정 대상(용돈 · 주거비 · 고정비)과 목적지를 모르는
-  // 이체. 0 이면 줄을 만들지 않고, 값이 있으면 반드시 보인다 — 합계에서만
-  // 조용히 사라지는 돈이 없어야 한다.
-  for (const target of ["용돈", "주거비", "고정비"]) {
-    const total = adjustmentTotal(adjustments, target);
-    if (total !== 0) summaryRows.push({ label: `${target} 보정`, value: total });
-  }
+  // 목적지를 모르는 이체. 0 이면 줄을 만들지 않고, 값이 있으면 반드시 보인다 —
+  // 합계에서만 조용히 사라지는 돈이 없어야 한다.
   if (기타이체 !== 0) {
     summaryRows.push({ label: "기타 이체", value: 기타이체, note: "목적지 미확인" });
   }
 
   const shown = summaryRows.reduce((sum, item) => sum + (item.value ?? 0), 0);
-  // 합계는 집계가 낸 값을 그대로 쓴다. 위 줄들의 합과 어긋나면 표가 무언가를
-  // 빠뜨린 것이므로 차액을 드러낸다(조용히 맞추지 않는다).
-  const 합계 = report.종합정산.보정후순증감;
+  // 합계는 집계가 낸 값(실현순증감 = 메인 계좌 거래 금액의 합)을 그대로 쓴다.
+  // 위 줄들의 합과 어긋나면 표가 무언가를 빠뜨린 것이므로 차액을 드러낸다
+  // (조용히 맞추지 않는다).
+  const 합계 = report.종합정산.실현순증감;
   const missing = 합계 - shown;
 
   // 원본 마지막 두 줄. 회색 `보정` 자리에 검산 차액이 온다.
@@ -567,8 +565,7 @@ export function ReportView({
           <p className="text-xs text-zinc-500">
             이 계좌들의 입금은 메인에서 간 돈이라 오른쪽 종합정산의 수입으로 세지
             않습니다. 이자도 수입으로 올리지 않고 <strong>그 계좌 안에서 집행을
-            상계</strong>합니다(순증감). 원본 템플릿에서 손으로 넣던 소액 ‘보정’ 칸이
-            바로 이 이자였고, 이제 실거래로 채워집니다.
+            상계</strong>합니다(순증감).
           </p>
         </div>
 
@@ -700,9 +697,16 @@ export function ReportView({
             </Link>
           ) : null}
         </p>
+        {report.미분류.계좌간이체입금 > 0 ? (
+          <p className="text-xs text-zinc-500">
+            메인 계좌에서 고정비 · 비상금 계좌로 옮긴 돈이 받는 쪽 계좌에 찍힌 입금{" "}
+            {report.미분류.계좌간이체입금}건은 분류가 없어도 위 계좌 표의 ‘입금’으로 세므로
+            미분류에서 뺐습니다.
+          </p>
+        ) : null}
         <p className="text-xs text-zinc-500">
-          미분류 출금은 위 변동비 표에 ‘미분류’ 꼬리표로, 미분류 입금은 수입 표에 나옵니다.
-          ‘기타’로 처리한 거래는 분류된 것으로 세며, 출금은 변동비 표에 ‘기타’ 꼬리표로,
+          미분류 출금은 위 변동비 표에 ‘미분류’ 꼬리표로, 메인 계좌의 미분류 입금은 수입 표에 나옵니다.
+          ‘기타’로 분류한 거래는 분류된 것으로 세며, 출금은 변동비 표에 ‘기타’ 꼬리표로,
           입금은 수입 표에 ‘기타’ 꼬리표로 나옵니다.
         </p>
       </section>

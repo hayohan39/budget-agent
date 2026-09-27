@@ -114,8 +114,8 @@ test('부호가 뒤집힌 행도 차액으로 드러난다', () => {
   assert.equal(result.difference, 1600000);
 });
 
-test('보정은 검산 대상이 아니다', () => {
-  // 보정으로 차액을 덮으면 안 된다(PLAN.md: 0 이 아니면 누락·오분류 신호다).
+test('수동 보정 입력으로 검산을 덮을 수 없다(보정은 집계에서 없앴다)', () => {
+  // 손으로 차액을 덮으면 안 된다(PLAN.md: 0 이 아니면 누락·오분류 신호다).
   const withAdjustment = report(fixtureRows(), {
     adjustments: [{ target: '변동비', amount: '999999', reason: '덮어쓰기 시도' }],
   });
@@ -123,7 +123,7 @@ test('보정은 검산 대상이 아니다', () => {
   const result = verifyMonthlyReport(withAdjustment);
   assert.equal(result.ok, true);
   assert.equal(result.actual, withAdjustment.종합정산.실현순증감);
-  assert.notEqual(result.actual, withAdjustment.종합정산.보정후순증감);
+  assert.deepEqual(result, verifyMonthlyReport(report(fixtureRows())));
 });
 
 test('경계 행의 잔액이 비면 검산하지 않고 사유를 남긴다', () => {

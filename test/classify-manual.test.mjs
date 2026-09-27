@@ -43,6 +43,7 @@ function valid(overrides = {}) {
   return {
     scope: 'once',
     month: '2026-08',
+    account: 'main',
     key: '코웨이08월렌탈',
     direction: 'out',
     category: '고정비',
@@ -60,6 +61,7 @@ test('올바른 요청은 정규화된 키 · 항목으로 통과한다', () => 
     value: {
       scope: 'once',
       month: '2026-08',
+      account: 'main',
       key: '코웨이08월렌탈',
       direction: 'out',
       category: '고정비',
@@ -67,6 +69,19 @@ test('올바른 요청은 정규화된 키 · 항목으로 통과한다', () => 
       stripMonth: false,
     },
   });
+});
+
+test('계좌는 역할(main · fixed · emergency)로만 받는다 — 없거나 모르는 값은 거부한다', () => {
+  for (const account of ['main', 'fixed', 'emergency']) {
+    assert.equal(parseClassifyRequest(valid({ account })).value.account, account);
+  }
+  for (const account of [undefined, null, '', 'MAIN', 'any', 1, '1', '1288', ['main'], { role: 'main' }]) {
+    const parsed = parseClassifyRequest(valid({ account }));
+    assert.equal(parsed.ok, false, String(account));
+    assert.equal(parsed.error, 'badAccount');
+    // 받은 값을 되비추지 않는다.
+    assert.ok(!JSON.stringify(parsed).includes('1288'));
+  }
 });
 
 test('stripMonth 는 boolean 만 받는다 — 생략하면 false, boolean 이 아니면 거부한다', () => {
@@ -994,7 +1009,7 @@ test('기타로 고른 묶음은 분류된 것이다 — 미분류만 보기와 
   assert.deepEqual([other.category, other.unclassified, other.mixed], ['기타', 0, false]);
 });
 
-test('기타로 처리: 이번만 · 앞으로도 모두 되고, 앞으로도는 그 방향의 기타 매핑을 저장한다', async (t) => {
+test('분류 기타: 이번만 · 앞으로도 모두 되고, 앞으로도는 그 방향의 기타 매핑을 저장한다', async (t) => {
   await withScratchDatabase(t, 'classify_other', async (client) => {
     await importFixture(client);
     assert.equal(await countUnclassified(client, '2026-08'), 8);
@@ -1034,5 +1049,192 @@ test('기타로 처리: 이번만 · 앞으로도 모두 되고, 앞으로도는
       { category: '기타', item: '김철수', direction: 'in', total: 4534000, count: 3 },
     );
     assert.equal(verifyMonthlyReport(report).ok, true);
+  });
+});
+
+// ── 계좌별 묶음 · 받는 쪽 계좌의 내 계좌 간 이체 ────────────────────────────
+//
+// 사용자 보고: "메인계좌에서 비상금계좌, 고정비계좌로 옮겨지는 것이 수입 미분류로
+// 뜨는데 메인의 수입항목인것처럼 나와서 애매해." 금액 · 이름은 전부 가상이다.
+
+const ACCOUNTS = SCRATCH_ACCOUNTS.map(({ id, role, nickname }) => ({ id, role, nickname }));
+
+/** 한 달(2026-10)치 합성 행. 순수 묶기 테스트와 DB 왕복이 같은 모양을 쓴다. */
+function octoberRows() {
+  return [
+    // 메인 → 고정비 · 비상금 이체(보낸 쪽). 규칙이 고정비이체 · 비상금이체로 분류한다.
+    { id: '1', account_id: 1, txn_at: '2026-10-05T09:00:00+09:00', description: '고정비 계좌', txn_type: '자동이체', amount: '-1000000', category: '고정비이체', is_transfer: true },
+    { id: '2', account_id: 1, txn_at: '2026-10-05T09:01:00+09:00', description: '비상금 계좌', txn_type: '자동이체', amount: '-300000', category: '비상금이체', is_transfer: true },
+    // 받는 쪽. 적요가 보낸 사람 이름이라 규칙에 걸리지 않는다(미분류).
+    { id: '3', account_id: 2, txn_at: '2026-10-05T09:00:00+09:00', description: '홍길동', txn_type: '입금', amount: '1000000', category: null, is_transfer: false },
+    { id: '4', account_id: 3, txn_at: '2026-10-05T09:01:00+09:00', description: '홍길동', txn_type: '입금', amount: '300000', category: null, is_transfer: false },
+    // 비상금 계좌의 **짝 없는** 입금(메인 쪽 이체가 없다). 미분류로 남아야 한다.
+    { id: '5', account_id: 3, txn_at: '2026-10-20T12:00:00+09:00', description: '홍길동', txn_type: '입금', amount: '50000', category: null, is_transfer: false },
+    // 메인 계좌의 같은 이름 입금(다른 은행에서 옮긴 돈 등). 메인의 미분류 수입이다.
+    { id: '6', account_id: 1, txn_at: '2026-10-10T10:00:00+09:00', description: '홍길동', txn_type: '입금', amount: '200000', category: null, is_transfer: false },
+  ];
+}
+
+test('묶음은 계좌별이다 — 같은 적요 · 같은 방향이라도 계좌가 다르면 섞지 않고 메인 → 고정비 → 비상금 순이다', () => {
+  const groups = groupRows(octoberRows(), CLASSIFY_FILTERS.all, ACCOUNTS);
+  assert.deepEqual(
+    groups.map((group) => [group.account?.nickname, group.key, group.direction, group.count, group.total]),
+    [
+      ['메인', '고정비 계좌', 'out', 1, -1000000],
+      ['메인', '비상금 계좌', 'out', 1, -300000],
+      ['메인', '홍길동', 'in', 1, 200000],
+      ['고정비', '홍길동', 'in', 1, 1000000],
+      ['비상금', '홍길동', 'in', 2, 350000],
+    ],
+  );
+  // 계좌는 역할 · 별칭뿐이다. 뒤 4자리는 묶음에 들어가지 않는다.
+  for (const group of groups) {
+    assert.deepEqual(Object.keys(group.account).sort(), ['nickname', 'role']);
+    assert.ok(!JSON.stringify(group).includes('2222'));
+  }
+});
+
+test('받는 쪽 계좌의 내 계좌 간 이체 입금은 미분류로 세지 않는다 — 짝 없는 입금은 그대로 미분류다', () => {
+  const unclassified = groupRows(octoberRows(), CLASSIFY_FILTERS.unclassified, ACCOUNTS);
+  assert.deepEqual(
+    unclassified.map((group) => [group.account?.role, group.key, group.direction, group.unclassified, group.transferIn]),
+    [
+      ['main', '홍길동', 'in', 1, 0],
+      // 비상금 계좌의 홍길동 입금 2건 중 1건(300,000)은 메인 이체와 짝이고, 짝 없는 50,000 만 미분류다.
+      ['emergency', '홍길동', 'in', 1, 1],
+    ],
+  );
+  // 고정비 계좌의 홍길동 입금은 전부 짝이 있어 '미분류만' 에서 빠진다. '전체' 에서는 보인다.
+  const all = groupRows(octoberRows(), CLASSIFY_FILTERS.all, ACCOUNTS);
+  const fixed = all.find((group) => group.account?.role === 'fixed');
+  assert.deepEqual([fixed.unclassified, fixed.transferIn, fixed.category], [0, 1, null]);
+
+  // 짝 조건이 깨지면(금액이 다르면) 다시 미분류로 보인다 — 숨기지 않는다.
+  const broken = octoberRows().map((row) => (row.id === '3' ? { ...row, amount: '999999' } : row));
+  assert.ok(
+    groupRows(broken, CLASSIFY_FILTERS.unclassified, ACCOUNTS).some(
+      (group) => group.account?.role === 'fixed' && group.unclassified === 1,
+    ),
+  );
+});
+
+async function insertOctober(client) {
+  // 업로드처럼 분류 없이 넣고 규칙으로 분류한다(메인 쪽 이체만 규칙에 걸린다).
+  const records = octoberRows().map((row) => ({
+    account_id: row.account_id,
+    txn_at: row.txn_at,
+    description: row.description,
+    txn_type: row.txn_type,
+    institution: null,
+    cp_acct_hash: null,
+    amount: Number(row.amount),
+    balance: null,
+    memo: null,
+    category: null,
+    category_source: null,
+    item: null,
+    is_transfer: row.is_transfer,
+    dedupe_key: `test-october-${row.id}`,
+    year_month: '2026-10',
+  }));
+  await insertTransactions(client, records);
+  await classifyStored(client);
+}
+
+test('DB: 메인 → 고정비 · 비상금 이체의 받는 쪽 입금은 /classify 미분류와 리포트 미분류 건수에서 빠진다', async (t) => {
+  await withScratchDatabase(t, 'classify_transfer_in', async (client) => {
+    await insertOctober(client);
+
+    // 저장된 행 자체는 여전히 category IS NULL 이다(읽을 때 짝을 짓는다).
+    assert.equal(await countUnclassified(client, '2026-10'), 4);
+
+    const groups = await listClassifyGroups(client, '2026-10', CLASSIFY_FILTERS.unclassified);
+    assert.deepEqual(
+      groups.map((group) => [group.account?.nickname, group.key, group.direction, group.unclassified]),
+      [
+        ['메인', '홍길동', 'in', 1],
+        ['비상금', '홍길동', 'in', 1],
+      ],
+    );
+
+    const report = await buildMonthlyReport(client, '2026-10');
+    assert.equal(report.미분류.count, 2);
+    assert.equal(report.미분류.계좌간이체입금, 2);
+    // 리포트는 받는 쪽 입금을 원래대로 그 계좌 블록의 입금으로 센다(수입이 아니다).
+    assert.equal(report.수입.total, 200000);
+    const fixed = report.계좌블록.find((block) => block.role === 'fixed');
+    const emergency = report.계좌블록.find((block) => block.role === 'emergency');
+    assert.equal(fixed.입금.total, 1000000);
+    assert.equal(emergency.입금.total, 350000);
+  });
+});
+
+test('DB: 이번만은 그 계좌의 묶음만 바꾼다 — 다른 계좌의 같은 적요 · 같은 방향 행은 그대로다', async (t) => {
+  await withScratchDatabase(t, 'classify_account_once', async (client) => {
+    await insertOctober(client);
+
+    const outcome = await applyClassification(
+      client,
+      valid({ month: '2026-10', account: 'emergency', key: '홍길동', direction: 'in', category: '기타', item: null }),
+    );
+    assert.deepEqual(outcome, { ok: true, updated: 2, mapped: false });
+
+    const byAccount = await client.query(
+      `SELECT a.role, t.category FROM transactions t JOIN accounts a ON a.id = t.account_id
+        WHERE t.description = '홍길동' ORDER BY t.id`,
+    );
+    assert.deepEqual(
+      byAccount.rows.map((row) => [row.role, row.category]),
+      [
+        ['fixed', null],
+        ['emergency', '기타'],
+        ['emergency', '기타'],
+        ['main', null],
+      ],
+    );
+
+    // 그 계좌에 없는 묶음은 거부한다(고정비 계좌에는 '고정비 계좌' 출금이 없다).
+    const missing = await applyClassification(
+      client,
+      valid({ month: '2026-10', account: 'fixed', key: '고정비 계좌', direction: 'out', category: '기타', item: null }),
+    );
+    assert.equal(missing.error, 'keyNotFound');
+  });
+});
+
+test('DB: 앞으로도는 매핑이 계좌를 모르므로 다른 계좌 · 같은 달의 같은 적요 · 같은 방향 행도 따라가되 manual 은 그대로다', async (t) => {
+  await withScratchDatabase(t, 'classify_account_always', async (client) => {
+    await insertOctober(client);
+    // 비상금 계좌의 짝 없는 입금 하나는 사람이 '이번만' 으로 이미 골랐다.
+    await client.query(
+      `UPDATE transactions SET category = '비상금', category_source = 'manual'
+        WHERE dedupe_key = 'test-october-5'`,
+    );
+
+    const outcome = await applyClassification(
+      client,
+      valid({ scope: 'always', month: '2026-10', account: 'main', key: '홍길동', direction: 'in', category: '수입', item: null }),
+    );
+    assert.equal(outcome.ok, true);
+    assert.deepEqual(await mapRows(client), [['홍길동', 'in', '수입', null]]);
+
+    const rows = await client.query(
+      `SELECT dedupe_key, category, category_source FROM transactions
+        WHERE description = '홍길동' ORDER BY dedupe_key`,
+    );
+    assert.deepEqual(
+      rows.rows.map((row) => [row.dedupe_key, row.category, row.category_source]),
+      [
+        ['test-october-3', '수입', 'map'],
+        ['test-october-4', '수입', 'map'],
+        ['test-october-5', '비상금', 'manual'],
+        ['test-october-6', '수입', 'map'],
+      ],
+    );
+
+    // 받는 쪽 계좌의 입금에 '수입' 이 붙어도 리포트의 종합정산 수입은 메인 계좌만 센다.
+    const report = await buildMonthlyReport(client, '2026-10');
+    assert.equal(report.수입.total, 200000);
+    assert.equal(report.미분류.count, 0);
   });
 });

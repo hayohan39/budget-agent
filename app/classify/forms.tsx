@@ -1,7 +1,7 @@
 "use client";
 
-// /classify 의 입력 조각. 서버로 보내는 것은 달 · 묶음 키(정규화한 적요) · 방향 ·
-// 분류 · 항목 · 범위뿐이다. 행 id · 건수 · 금액은 보내지 않는다 — 서버가 그 달의
+// /classify 의 입력 조각. 서버로 보내는 것은 달 · 계좌 역할(main · fixed ·
+// emergency) · 묶음 키(정규화한 적요) · 방향 · 분류 · 항목 · 범위뿐이다. 행 id · 건수 · 금액은 보내지 않는다 — 서버가 그 달의
 // 행을 직접 다시 읽어 묶음을 찾는다(lib/classify/manual.mjs). 방향도 서버가 저장된
 // 금액에서 다시 계산해 맞춰 본다.
 //
@@ -9,16 +9,20 @@
 import { useRouter } from "next/navigation";
 import { useId, useState, type FormEvent } from "react";
 
+import { accountLabel, type GroupAccount } from "./account-label";
+
 /** 묶음의 방향. 매핑에는 방향 구분 전의 `any` 가 더 있다. */
 export type Direction = "in" | "out";
 export type MappingDirection = Direction | "any";
 
 export type ClassifyGroup = {
+  account: GroupAccount | null;
   key: string;
   direction: Direction;
   count: number;
   total: number;
   unclassified: number;
+  transferIn: number;
   transfer: number;
   manual: number;
   mixed: boolean;
@@ -137,23 +141,34 @@ function CategorySelect({
   );
 }
 
+const ACCOUNT_BADGE: Record<string, string> = {
+  main: "border-zinc-300 text-zinc-700 dark:border-zinc-600 dark:text-zinc-300",
+  fixed: "border-amber-400 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200",
+  emergency: "border-rose-400 bg-rose-50 text-rose-900 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-200",
+};
+
+function AccountBadge({ account }: { account: GroupAccount | null }) {
+  return (
+    <span
+      data-testid="account"
+      className={`mr-2 inline-block rounded border px-1.5 py-0.5 align-middle text-xs font-normal ${ACCOUNT_BADGE[account?.role ?? ""] ?? ACCOUNT_BADGE.main}`}
+    >
+      {accountLabel(account)}
+    </span>
+  );
+}
+
 /**
- * 한 묶음의 입력.
- *
- * "기타로 처리" 는 분류 선택 없이 `otherCategory`(기타)로 바로 보낸다. 범위(이번만 ·
- * 앞으로도)와 항목은 폼에서 고른 값을 그대로 쓴다 — 앞으로도면 이 묶음의 방향으로
- * 기타 매핑이 저장된다.
+ * 한 묶음의 입력. 분류는 드롭다운 하나로만 고른다(‘기타’ 도 드롭다운에 있다).
  */
 export function GroupForm({
   month,
   group,
   categories,
-  otherCategory,
 }: {
   month: string;
   group: ClassifyGroup;
   categories: string[];
-  otherCategory: string;
 }) {
   const router = useRouter();
   const [category, setCategory] = useState(
@@ -167,7 +182,8 @@ export function GroupForm({
   // id 에 적요를 넣지 않는다(DOM id 에 한글·공백이 섞이면 label 연결이 깨진다).
   const uid = useId();
 
-  async function send(chosen: string) {
+  async function send() {
+    const chosen = category;
     if (chosen === "") {
       setStatus({ kind: "error", text: "분류를 골라 주세요." });
       return;
@@ -177,6 +193,7 @@ export function GroupForm({
       const { ok, data } = await post("/api/classify", {
         scope,
         month,
+        account: group.account?.role,
         key: group.key,
         direction: group.direction,
         category: chosen,
@@ -192,7 +209,6 @@ export function GroupForm({
         kind: "done",
         text: `${String(data.updated ?? 0)}건에 적용했습니다${data.mapped === true ? " · 매핑 저장" : ""}.`,
       });
-      if (chosen !== category) setCategory(chosen);
       router.refresh();
     } catch {
       setStatus({ kind: "error", text: "서버에 연결하지 못했습니다." });
@@ -201,7 +217,7 @@ export function GroupForm({
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void send(category);
+    void send();
   }
 
   const current = group.mixed
@@ -218,6 +234,7 @@ export function GroupForm({
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="font-medium break-all">
+          <AccountBadge account={group.account} />
           <DirectionBadge direction={group.direction} />
           {group.key}
         </p>
@@ -232,6 +249,13 @@ export function GroupForm({
           : ""}
         {group.manual > 0 ? ` · ‘이번만’으로 고른 거래 ${group.manual}건` : ""}
       </p>
+      {group.transferIn > 0 ? (
+        <p className="text-xs text-sky-700 dark:text-sky-400">
+          이 중 {group.transferIn}건은 메인 계좌에서 옮겨 온 돈(내 계좌 간 이체)으로 확인됐습니다.
+          분류하지 않아도 현금흐름표의 ‘{accountLabel(group.account)}’ 입금으로 들어가므로 미분류로
+          세지 않습니다.
+        </p>
+      ) : null}
       {group.transfer > 0 ? (
         <p className="text-xs text-amber-700 dark:text-amber-400">
           내 계좌 간 이동으로 표시된 거래가 {group.transfer}건 있습니다. 이 거래들은 분류와
@@ -292,17 +316,6 @@ export function GroupForm({
         <button type="submit" className={BUTTON} disabled={status.kind === "busy"}>
           {status.kind === "busy" ? "저장 중…" : "적용"}
         </button>
-        {categories.includes(otherCategory) ? (
-          <button
-            type="button"
-            className={BUTTON}
-            disabled={status.kind === "busy"}
-            onClick={() => void send(otherCategory)}
-            title="따로 나눌 필요가 없는 거래를 ‘기타’로 분류합니다. 고른 적용 범위를 따릅니다."
-          >
-            기타로 처리
-          </button>
-        ) : null}
       </div>
       <StatusLine status={status} />
     </form>

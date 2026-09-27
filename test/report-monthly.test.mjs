@@ -22,6 +22,7 @@ import {
   balanceSpan,
   buildMonthlyReport,
   isTransferLeg,
+  matchIncomingTransfers,
 } from '../lib/report/monthly.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -352,18 +353,86 @@ test('카드대금을 카드사별로 묶는다', () => {
   );
 });
 
-// ── 보정 ──────────────────────────────────────────────────────────────────
+// ── 보정은 없다 ────────────────────────────────────────────────────────────
 
-test('보정은 실현순증감과 따로 계산하고 합쳐서도 보여 준다', () => {
+test('수동 보정은 집계에 없다 — 입력으로 넘겨도 무시하고 종합정산의 합계는 실현순증감이다', () => {
+  // 사용자 요청(2026-09): "보정은 수동으로 기입할때 생겼던 것들이야. 이제는 필요없으니 삭제해줘."
   const result = report(
     [row({ id: '1', amount: '1000000' })],
     { adjustments: [{ target: '수입', amount: '-50000', reason: '이월 정산' }] },
   );
 
-  assert.equal(result.보정.total, -50000);
-  assert.deepEqual(result.보정.items, [{ target: '수입', amount: -50000, reason: '이월 정산' }]);
+  assert.equal(Object.hasOwn(result, '보정'), false);
+  assert.deepEqual(Object.keys(result.종합정산), [
+    '수입',
+    '고정지출1',
+    '고정지출2',
+    '변동지출',
+    '계좌간이동',
+    '실현순증감',
+  ]);
   assert.equal(result.종합정산.실현순증감, 1000000);
-  assert.equal(result.종합정산.보정후순증감, 950000);
+});
+
+// ── 받는 쪽 계좌의 내 계좌 간 이체 ─────────────────────────────────────────
+
+/** 메인 → 고정비 이체 한 쌍(보낸 쪽 · 받는 쪽). 금액 · 시각은 임의의 값이다. */
+function transferPair({ gapMinutes = 0, inAmount = '1000000', inAccount = 2 } = {}) {
+  const at = new Date(Date.parse('2026-08-05T09:00:00+09:00') + gapMinutes * 60 * 1000).toISOString();
+  return [
+    row({ id: '10', account_id: 1, txn_at: '2026-08-05T09:00:00+09:00', amount: '-1000000', description: '고정비 계좌', category: '고정비이체', is_transfer: true }),
+    row({ id: '11', account_id: inAccount, txn_at: at, amount: inAmount, description: '홍길동' }),
+  ];
+}
+
+test('matchIncomingTransfers: 메인의 이동 출금과 금액 · 받는 계좌 · 시각이 맞는 입금만 짝짓는다', () => {
+  assert.deepEqual([...matchIncomingTransfers({ accounts: ACCOUNTS, rows: transferPair() })], ['11']);
+  // 허용 시각 안(10분)은 짝, 밖은 짝이 아니다.
+  assert.deepEqual([...matchIncomingTransfers({ accounts: ACCOUNTS, rows: transferPair({ gapMinutes: 10 }) })], ['11']);
+  assert.equal(matchIncomingTransfers({ accounts: ACCOUNTS, rows: transferPair({ gapMinutes: 11 }) }).size, 0);
+  // 금액이 다르면 짝이 아니다.
+  assert.equal(matchIncomingTransfers({ accounts: ACCOUNTS, rows: transferPair({ inAmount: '999999' }) }).size, 0);
+  // 다른 계좌(비상금)로 들어온 같은 금액은 짝이 아니다 — 보낸 쪽은 고정비로 갔다.
+  assert.equal(matchIncomingTransfers({ accounts: ACCOUNTS, rows: transferPair({ inAccount: 3 }) }).size, 0);
+  // 메인 계좌에 들어온 돈은 받는 쪽 다리가 아니다.
+  assert.equal(matchIncomingTransfers({ accounts: ACCOUNTS, rows: transferPair({ inAccount: 1 }) }).size, 0);
+  // 계좌 목록이 없으면 아무것도 짝짓지 않는다.
+  assert.equal(matchIncomingTransfers({ accounts: [], rows: transferPair() }).size, 0);
+});
+
+test('matchIncomingTransfers: 1:1 로만 짝짓고 가장 가까운 입금을 고른다', () => {
+  const rows = [
+    ...transferPair({ gapMinutes: 3 }),
+    // 같은 금액의 입금이 하나 더 있다. 시각이 더 가까우므로 이쪽이 짝이다.
+    row({ id: '12', account_id: 2, txn_at: '2026-08-05T09:00:30+09:00', amount: '1000000', description: '홍길동' }),
+  ];
+  assert.deepEqual([...matchIncomingTransfers({ accounts: ACCOUNTS, rows })], ['12']);
+});
+
+test('matchIncomingTransfers: 분류 없이 is_transfer 만 선 보낸 쪽은 적요로 받는 계좌를 안다 · 이자는 짝이 아니다', () => {
+  const rows = [
+    row({ id: '20', account_id: 1, txn_at: '2026-08-06T09:00:00+09:00', amount: '-300000', description: '비상금 계좌', is_transfer: true }),
+    row({ id: '21', account_id: 3, txn_at: '2026-08-06T09:00:00+09:00', amount: '300000', description: '홍길동' }),
+    row({ id: '22', account_id: 1, txn_at: '2026-08-31T00:00:00+09:00', amount: '-64', description: '고정비 계좌', category: '고정비이체', is_transfer: true }),
+    row({ id: '23', account_id: 2, txn_at: '2026-08-31T00:00:00+09:00', amount: '64', txn_type: '이자입금', category: '이자' }),
+  ];
+  assert.deepEqual([...matchIncomingTransfers({ accounts: ACCOUNTS, rows })], ['21']);
+});
+
+test('받는 쪽 계좌의 이체 입금은 미분류 건수에서 빠지고, 짝 없는 입금은 그대로 센다', () => {
+  const rows = [
+    ...transferPair(),
+    // 고정비 계좌의 짝 없는 입금(환불 등).
+    row({ id: '30', account_id: 2, txn_at: '2026-08-20T09:00:00+09:00', amount: '15000', description: '환불' }),
+  ];
+  const result = report(rows);
+  assert.equal(result.미분류.count, 1);
+  assert.equal(result.미분류.계좌간이체입금, 1);
+  // 계좌 블록의 입금 · 종합정산은 짝 여부와 무관하게 예전과 같다.
+  const fixed = result.계좌블록.find((block) => block.role === 'fixed');
+  assert.deepEqual(fixed.입금, { total: 1015000, count: 2 });
+  assert.equal(result.수입.total, 0);
+  assert.equal(result.종합정산.실현순증감, -1000000);
 });
 
 // ── 잔액 ──────────────────────────────────────────────────────────────────
@@ -658,6 +727,7 @@ test('저장된 한 달치로 같은 숫자가 나온다', async (t) => {
     await client.query('COMMIT');
     await classifyStored(client, { yearMonth: YM });
 
+    // adjustments 테이블은 스키마에 남아 있지만 집계는 더 이상 읽지 않는다.
     await client.query(
       `INSERT INTO adjustments (year_month, target, amount, reason)
        VALUES ($1, '변동비', -10000, '전월 이월')`,
@@ -681,8 +751,8 @@ test('저장된 한 달치로 같은 숫자가 나온다', async (t) => {
     assert.equal(result.고정지출1.total, -5150000);
     assert.equal(result.고정지출2.total, 0);
     assert.equal(result.미분류.count, 8);
-    assert.equal(result.보정.total, -10000);
-    assert.equal(result.종합정산.보정후순증감, result.종합정산.실현순증감 - 10000);
+    assert.equal(Object.hasOwn(result, '보정'), false);
+    assert.equal(Object.hasOwn(result.종합정산, '보정후순증감'), false);
 
     const main = result.계좌별잔액변화.find((entry) => entry.role === 'main');
     assert.equal(main.change, -441865);
