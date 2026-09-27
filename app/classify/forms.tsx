@@ -7,7 +7,7 @@
 //
 // console 호출이 이 파일에 없다. 실패하면 서버가 준 고정 문장만 보여 준다.
 import { useRouter } from "next/navigation";
-import { useId, useState, type FormEvent } from "react";
+import { useId, useState, useTransition, type FormEvent } from "react";
 
 import { accountLabel, type GroupAccount } from "./account-label";
 
@@ -160,17 +160,34 @@ function AccountBadge({ account }: { account: GroupAccount | null }) {
 
 /**
  * 한 묶음의 입력. 분류는 드롭다운 하나로만 고른다(예전 ‘기타’ 는 ‘변동비’ 로 합쳤다).
+ *
+ * ── 빠르게 보이기(2026-09) ──
+ *
+ * 예전에는 POST 가 끝날 때까지 기다린 뒤 `router.refresh()` 가 끝날 때까지 화면이
+ * 그대로였다. 이제:
+ *   - `hideOnApply`(= ‘미분류만’ 보기)이면 적용을 누르는 즉시 이 묶음을 목록에서
+ *     접는다(낙관적 제거). 분류를 고른 묶음은 어차피 미분류 목록에서 빠진다.
+ *   - 서버가 거절하거나 연결이 끊기면 접은 것을 되돌리고 서버가 준 문장을 보여 준다.
+ *     분류가 맞는지는 늘 서버가 정한다(lib/classify/manual.mjs 가 다시 검사한다) —
+ *     여기서 접는 것은 화면의 예상일 뿐이다.
+ *   - 성공하면 목록 새로 고침을 `startTransition` 안에서 한다. 새로 고치는 동안에도
+ *     다른 묶음을 계속 고를 수 있다.
  */
 export function GroupForm({
   month,
   group,
   categories,
+  hideOnApply = false,
 }: {
   month: string;
   group: ClassifyGroup;
   categories: string[];
+  hideOnApply?: boolean;
 }) {
   const router = useRouter();
+  const [, startTransition] = useTransition();
+  // 낙관적으로 접었는가. 실패하면 false 로 되돌린다.
+  const [collapsed, setCollapsed] = useState(false);
   const [category, setCategory] = useState(
     !group.mixed && group.category !== null && categories.includes(group.category) ? group.category : "",
   );
@@ -189,6 +206,7 @@ export function GroupForm({
       return;
     }
     setStatus({ kind: "busy" });
+    if (hideOnApply) setCollapsed(true);
     try {
       const { ok, data } = await post("/api/classify", {
         scope,
@@ -202,6 +220,7 @@ export function GroupForm({
         stripMonth: scope === "always" ? stripMonth : undefined,
       });
       if (!ok) {
+        setCollapsed(false);
         setStatus({ kind: "error", text: failureText(data) });
         return;
       }
@@ -209,8 +228,9 @@ export function GroupForm({
         kind: "done",
         text: `${String(data.updated ?? 0)}건에 적용했습니다${data.mapped === true ? " · 매핑 저장" : ""}.`,
       });
-      router.refresh();
+      startTransition(() => router.refresh());
     } catch {
+      setCollapsed(false);
       setStatus({ kind: "error", text: "서버에 연결하지 못했습니다." });
     }
   }
@@ -225,6 +245,25 @@ export function GroupForm({
     : group.category === null
       ? "미분류"
       : `${group.category}${group.source !== null ? ` (${SOURCE_TEXT[group.source] ?? group.source})` : ""}`;
+
+  if (collapsed) {
+    // 낙관적으로 접은 자리. 새로 고침이 끝나면 서버 목록에서 이 묶음이 빠져 사라진다.
+    return (
+      <div
+        data-testid="classify-group-applied"
+        className="flex flex-wrap items-baseline justify-between gap-2 rounded-md border border-dashed border-zinc-300 px-3 py-2 text-xs text-zinc-500 dark:border-zinc-700"
+      >
+        <span className="break-all">
+          <AccountBadge account={group.account} />
+          <DirectionBadge direction={group.direction} />
+          {group.key}
+        </span>
+        <span role="status">
+          {status.kind === "done" ? `${status.text} 목록에서 뺐습니다.` : `‘${category}’(으)로 적용하는 중…`}
+        </span>
+      </div>
+    );
+  }
 
   return (
     <form

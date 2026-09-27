@@ -2,7 +2,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { aggregateMonthly } from '../lib/report/monthly.mjs';
+import {
+  aggregateMonthly,
+  buildMonthlyReport,
+  loadMonthlyInputs,
+  loadMonthlyInputsForMonths,
+} from '../lib/report/monthly.mjs';
+import { listYearMonths } from '../lib/report/months.mjs';
+import { withScratchDatabase } from './helpers/scratch-db.mjs';
 import {
   TREND_SERIES,
   fillTrendMonths,
@@ -176,7 +183,11 @@ test('fillTrendMonths: 빈 달을 null 로 채우고, 한 달치 · 0 달치도 
   assert.deepEqual(fillTrendMonths([trendPointOf(reportOf('2026-05', []))]), []);
 });
 
-/** listYearMonths · loadMonthlyInputs 의 쿼리에만 답하는 가짜 DB. */
+/**
+ * listYearMonths · loadMonthlyInputs · loadMonthlyInputsForMonths 의 쿼리에만 답하는 가짜 DB.
+ * 행에 year_month 를 붙이지 않으면 여러 달 조회가 달을 가를 수 없다 — 실제 DB 처럼
+ * 여러 달 조회에는 year_month 를 붙여 준다.
+ */
 function fakeClient(byMonth) {
   const queries = [];
   return {
@@ -187,11 +198,39 @@ function fakeClient(byMonth) {
         return { rows: Object.keys(byMonth).sort().reverse().map((year_month) => ({ year_month })) };
       }
       if (text.startsWith('SELECT id, role, nickname FROM accounts')) return { rows: ACCOUNTS };
+      if (text.includes('year_month = ANY($1')) {
+        const months = [...values[0]].sort();
+        return {
+          rows: months.flatMap((year_month) => (byMonth[year_month] ?? []).map((r) => ({ year_month, ...r }))),
+        };
+      }
       if (text.includes('FROM transactions')) return { rows: byMonth[values[0]] ?? [] };
-      if (text.includes('FROM adjustments')) return { rows: [] };
       throw new Error('모르는 쿼리');
     },
   };
+}
+
+/**
+ * 예전 경로 — 달마다 buildMonthlyReport(계좌 + 거래 2쿼리). 새 경로와 결과가 같은지
+ * 비교하려고 테스트에만 남긴다(달 고르는 방식은 loadMonthlyTrends 와 같다).
+ */
+async function loadMonthlyTrendsPerMonth(client, { months = 12 } = {}) {
+  const available = await listYearMonths(client);
+  if (available.length === 0) return [];
+  const latest = available[0];
+  const inRange =
+    months === null
+      ? available
+      : available.filter((yearMonth) => {
+          const [ly, lm] = latest.split('-').map(Number);
+          const [y, m] = yearMonth.split('-').map(Number);
+          return (ly - y) * 12 + (lm - m) < months;
+        });
+  const points = [];
+  for (const yearMonth of [...inRange].sort()) {
+    points.push(trendPointOf(await buildMonthlyReport(client, yearMonth)));
+  }
+  return fillTrendMonths(points);
 }
 
 test('loadMonthlyTrends: 최근 N개월은 달력 기준이고 빈 달을 채워 오름차순으로 돌려준다', async () => {
@@ -215,9 +254,149 @@ test('loadMonthlyTrends: 최근 N개월은 달력 기준이고 빈 달을 채워
   assert.deepEqual(recent.map((point) => point.yearMonth), ['2026-02', '2026-03']);
 
   // 달 값은 파라미터로만 나간다.
-  const monthQueries = client.queries.filter((query) => query.text.includes('WHERE year_month = $1'));
+  const monthQueries = client.queries.filter((query) => query.text.includes('year_month = ANY($1'));
   assert.ok(monthQueries.length > 0);
   for (const query of monthQueries) assert.ok(!query.text.includes('2026-'));
+});
+
+test('loadMonthlyTrends: 달 수와 무관하게 쿼리 3번(달 목록 · 계좌 · 거래)이다 — 예전에는 1 + 2N', async () => {
+  const byMonth = {};
+  for (const yearMonth of monthSpan('2025-10', '2026-09')) byMonth[yearMonth] = monthRows();
+
+  const fresh = fakeClient(byMonth);
+  const points = await loadMonthlyTrends(fresh, { months: 12 });
+  assert.equal(points.length, 12);
+  assert.equal(fresh.queries.length, 3);
+
+  const old = fakeClient(byMonth);
+  await loadMonthlyTrendsPerMonth(old, { months: 12 });
+  assert.equal(old.queries.length, 1 + 2 * 12);
+});
+
+test('loadMonthlyTrends: 새 경로와 예전 달별 경로의 결과가 같다(가짜 DB, 빈 달 · 범위 포함)', async () => {
+  const byMonth = {
+    '2025-11': monthRows(),
+    '2026-01': [...monthRows(), row({ amount: '30000', description: '가상중고거래', category: '변동비' })],
+    '2026-02': monthRows().slice(0, 5),
+    '2026-03': monthRows(),
+  };
+  for (const months of [null, 1, 3, 6, 12, 24]) {
+    assert.deepEqual(
+      await loadMonthlyTrends(fakeClient(byMonth), { months }),
+      await loadMonthlyTrendsPerMonth(fakeClient(byMonth), { months }),
+      String(months),
+    );
+  }
+});
+
+test('loadMonthlyInputsForMonths: 틀린 형식이면 쿼리를 내지 않고, 빈 목록은 빈 결과다', async () => {
+  const client = {
+    async query() {
+      throw new Error('쿼리가 나가면 안 된다');
+    },
+  };
+  for (const bad of [['2026-8'], ['2026-08', 'x'], 'not-an-array', [null]]) {
+    await assert.rejects(() => loadMonthlyInputsForMonths(client, bad), /YYYY-MM/);
+  }
+  assert.deepEqual(await loadMonthlyInputsForMonths(client, []), []);
+});
+
+test('loadMonthlyInputsForMonths: DB 오류 메시지를 그대로 흘리지 않는다', async () => {
+  const client = {
+    async query() {
+      throw new Error('relation "transactions" does not exist (host=secret-host)');
+    },
+  };
+  await assert.rejects(
+    () => loadMonthlyInputsForMonths(client, ['2026-08']),
+    (error) => {
+      assert.ok(!error.message.includes('secret-host'));
+      assert.match(error.message, /현금흐름표 입력을 읽지 못했습니다/);
+      return true;
+    },
+  );
+});
+
+/** 실제 DB 에 넣을 합성 행. txn_at 은 KST, year_month 는 KST 기준(월 경계 행 포함). */
+function dbRow(accountId, at, yearMonth, amount, description, extra = {}) {
+  return {
+    account_id: accountId,
+    txn_at: at,
+    description,
+    txn_type: amount > 0 ? '입금' : '출금',
+    amount,
+    balance: extra.balance ?? null,
+    category: extra.category ?? null,
+    is_transfer: extra.is_transfer ?? false,
+    item: extra.item ?? null,
+    year_month: yearMonth,
+  };
+}
+
+test('실제 DB: 여러 달 한 번 조회가 달별 조회와 입력 · 현금흐름표 · 추이까지 같다', async (t) => {
+  await withScratchDatabase(t, 'trends_batch', async (client) => {
+    const rows = [];
+    let balance = 5_000_000;
+    const months = ['2025-12', '2026-01', '2026-03', '2026-04'];
+    for (const [index, yearMonth] of months.entries()) {
+      const day = (d) => `${yearMonth}-${String(d).padStart(2, '0')}T09:00:00+09:00`;
+      const main = (at, amount, description, extra = {}) => {
+        balance += amount;
+        rows.push(dbRow(1, at, yearMonth, amount, description, { ...extra, balance }));
+      };
+      main(day(1), 3_000_000 + index, '가상회사 급여', { category: '수입' });
+      main(day(2), -1_000_000, '고정비 계좌', { category: '고정비이체', is_transfer: true });
+      rows.push(dbRow(2, day(2), yearMonth, 1_000_000, '홍길동'));
+      main(day(3), -300_000, '비상금 계좌', { category: '비상금이체', is_transfer: true });
+      rows.push(dbRow(3, day(3), yearMonth, 300_000, '홍길동'));
+      rows.push(dbRow(3, day(4), yearMonth, 900, '이자', { category: '이자' }));
+      rows.push(dbRow(2, day(5), yearMonth, -230_000, '가상관리비', { category: '고정비', item: '관리비' }));
+      main(day(6), -500_000, 'IRP', { category: '저축' });
+      main(day(7), -870_000, '가상카드주식회사', { category: '카드대금' });
+      // 같은 초의 두 건(id 순서가 시간 순서를 정한다).
+      main(day(8), -42_000, '가상마트');
+      main(day(8), -8_000, '가상마트');
+      main(day(9), 30_000 * (index + 1), '가상중고거래', { category: '변동비' });
+    }
+    // KST 로는 1월 1일 00:30 이지만 UTC 로는 전년 12월 31일인 행 — year_month 는 KST 기준 '2026-01'.
+    rows.push(dbRow(1, '2026-01-01T00:30:00+09:00', '2026-01', -1_000, '가상새해'));
+
+    for (const [index, r] of rows.entries()) {
+      await client.query(
+        `INSERT INTO transactions
+           (account_id, txn_at, description, txn_type, amount, balance, category, is_transfer, item,
+            year_month, dedupe_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [r.account_id, r.txn_at, r.description, r.txn_type, r.amount, r.balance, r.category, r.is_transfer, r.item,
+          r.year_month, `synthetic-${index}`],
+      );
+    }
+
+    const all = [...months, '2026-02', '2025-11'].sort();
+    const batch = await loadMonthlyInputsForMonths(client, all);
+    assert.deepEqual(batch.map((input) => input.yearMonth), all);
+    for (const input of batch) {
+      const single = await loadMonthlyInputs(client, input.yearMonth);
+      assert.deepEqual(input, single, input.yearMonth);
+      assert.deepEqual(aggregateMonthly(input), await buildMonthlyReport(client, input.yearMonth), input.yearMonth);
+    }
+
+    for (const range of [null, 1, 2, 3, 6, 12]) {
+      assert.deepEqual(
+        await loadMonthlyTrends(client, { months: range }),
+        await loadMonthlyTrendsPerMonth(client, { months: range }),
+        String(range),
+      );
+    }
+    const trends = await loadMonthlyTrends(client, { months: null });
+    assert.deepEqual(trends.map((point) => [point.yearMonth, point.hasData]), [
+      ['2025-12', true],
+      ['2026-01', true],
+      ['2026-02', false],
+      ['2026-03', true],
+      ['2026-04', true],
+    ]);
+  });
 });
 
 test('loadMonthlyTrends: 거래가 하나도 없으면 빈 목록이다', async () => {

@@ -16,6 +16,7 @@
 //   - console 호출이 없다. 에러는 바인딩 없는 `catch {}` 로 받는다.
 //   - `month` 는 SQL 에 닿기 전에 `^[0-9]{4}-[0-9]{2}$` 로 거르고, 틀리면 받은
 //     값을 되비추지 않는다.
+import Form from "next/form";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -65,7 +66,7 @@ function Picker({
 }) {
   const options = months.includes(selected) ? months : [selected, ...months];
   return (
-    <form method="get" action="/classify" className="flex flex-wrap items-center gap-2">
+    <Form action="/classify" className="flex flex-wrap items-center gap-2">
       <label htmlFor="month" className="text-sm text-zinc-600 dark:text-zinc-400">
         조회 월
       </label>
@@ -99,7 +100,7 @@ function Picker({
       >
         보기
       </button>
-    </form>
+    </Form>
   );
 }
 
@@ -226,7 +227,12 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
                   <ul className="flex flex-col gap-3">
                     {section.groups.map((group) => (
                       <li key={`${section.id}\u001f${group.direction}\u001f${group.key}`}>
-                        <GroupForm month={loaded.month as string} group={group} categories={categories} />
+                        <GroupForm
+                          month={loaded.month as string}
+                          group={group}
+                          categories={categories}
+                          hideOnApply={filter === CLASSIFY_FILTERS.unclassified}
+                        />
                       </li>
                     ))}
                   </ul>
