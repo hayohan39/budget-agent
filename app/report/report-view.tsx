@@ -420,11 +420,13 @@ function AccountTable({
         <WideRow label="이자" value={flow(block.이자.total)} />
         {hasVault ? (
           <>
-            <WideRow
-              label="금고저축"
-              value={flow(block.금고저축.total)}
-              note={`계좌 → 금고 ${block.금고저축.count}건`}
-            />
+            {block.금고저축.count > 0 ? (
+              <WideRow
+                label="금고저축"
+                value={flow(block.금고저축.total)}
+                note={`계좌 → 금고 ${block.금고저축.count}건`}
+              />
+            ) : null}
             {block.금고인출.count > 0 ? (
               <WideRow
                 label="금고 인출"
