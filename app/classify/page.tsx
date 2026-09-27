@@ -10,8 +10,9 @@
 //   - 항상 동적으로 렌더한다(`force-dynamic`). 정적으로 구워 두지 않는다.
 //     동적 페이지의 응답은 Next 가 `Cache-Control: private, no-cache, no-store`
 //     로 내보낸다.
-//   - 행 단위가 아니라 **적요별 묶음**만 보여 준다(건수 · 합계). 거래 일시 ·
-//     잔액 · 메모 · 계좌번호는 없다.
+//   - 행 단위가 아니라 **(계좌, 적요, 방향)별 묶음**만 보여 준다(건수 · 합계).
+//     거래 일시 · 잔액 · 메모 · 계좌번호는 없다. 계좌는 별칭(메인 · 고정비 ·
+//     비상금)으로만 보인다 — 뒤 4자리는 읽지도 않는다.
 //   - console 호출이 없다. 에러는 바인딩 없는 `catch {}` 로 받는다.
 //   - `month` 는 SQL 에 닿기 전에 `^[0-9]{4}-[0-9]{2}$` 로 거르고, 틀리면 받은
 //     값을 되비추지 않는다.
@@ -21,10 +22,11 @@ import { redirect } from "next/navigation";
 import { auth, isAllowedEmail } from "@/auth";
 import { withClient } from "@/lib/db/client.mjs";
 import { isYearMonth, listYearMonths } from "@/lib/report/months.mjs";
-import { CLASSIFY_CATEGORIES, OTHER_CATEGORY } from "@/lib/report/monthly.mjs";
+import { CLASSIFY_CATEGORIES } from "@/lib/report/monthly.mjs";
 import { CLASSIFY_FILTERS, listClassifyGroups, listMappings } from "@/lib/classify/manual.mjs";
 import { ITEM_MAX_LENGTH } from "@/lib/classify/item.mjs";
 
+import { accountLabel } from "./account-label";
 import { GroupForm, MappingRow, type ClassifyGroup, type Mapping } from "./forms";
 
 export const runtime = "nodejs";
@@ -101,6 +103,21 @@ function Picker({
   );
 }
 
+/**
+ * 묶음을 계좌별 구역으로 나눈다. 목록은 이미 계좌 순서(메인 → 고정비 → 비상금)로
+ * 정렬돼 온다(lib/classify/manual.mjs 의 groupRows) — 여기서는 끊기만 한다.
+ */
+function byAccount(groups: ClassifyGroup[]): Array<{ id: string; label: string; groups: ClassifyGroup[] }> {
+  const sections: Array<{ id: string; label: string; groups: ClassifyGroup[] }> = [];
+  for (const group of groups) {
+    const id = group.account?.role ?? "unknown";
+    const last = sections[sections.length - 1];
+    if (last !== undefined && last.id === id) last.groups.push(group);
+    else sections.push({ id, label: accountLabel(group.account), groups: [group] });
+  }
+  return sections;
+}
+
 function first(value: string | string[] | undefined): string {
   return (Array.isArray(value) ? value[0] : value) ?? "";
 }
@@ -174,14 +191,18 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
         <>
           <Picker months={loaded.months} selected={loaded.month} filter={filter} />
           <p className="text-xs text-zinc-500">
-            같은 적요끼리 묶어 보여 주고, 같은 적요라도 <strong>입금과 출금은 따로</strong>{" "}
-            묶습니다(용도가 다르기 때문입니다). <strong>이번만</strong>은 이 달의 이 묶음에만
-            적용하고, 나중에 매핑이나 규칙이 다시 돌아도 바뀌지 않습니다.{" "}
-            <strong>앞으로도</strong>는 매핑으로 저장해 다른 달의 같은 적요와 앞으로
-            올릴 거래 중 <strong>같은 방향</strong>의 거래에 적용합니다(반대 방향의 거래와
-            ‘이번만’으로 고른 다른 달의 거래는 건드리지 않습니다). 항목 이름은 {ITEM_MAX_LENGTH}자까지이며, 비워 두면 적요를 그대로
-            씁니다. 따로 나눌 필요가 없는 거래는 <strong>기타로 처리</strong>를 누르면
-            고른 범위로 ‘기타’ 분류가 됩니다(분류된 것으로 세어 미분류에서 빠집니다).
+            <strong>계좌별로</strong> 나누고, 그 안에서 같은 적요끼리 묶어 보여 줍니다. 같은
+            적요라도 <strong>입금과 출금은 따로</strong> 묶습니다(용도가 다르기 때문입니다).{" "}
+            <strong>이번만</strong>은 이 달 이 계좌의 이 묶음에만 적용하고, 나중에 매핑이나
+            규칙이 다시 돌아도 바뀌지 않습니다. <strong>앞으로도</strong>는 매핑으로 저장해
+            다른 달의 같은 적요와 앞으로 올릴 거래 중 <strong>같은 방향</strong>의 거래에
+            적용합니다 — 매핑은 <strong>계좌를 가리지 않으므로</strong> 다른 계좌의 같은 적요에도
+            걸립니다(반대 방향의 거래와 ‘이번만’으로 고른 거래는 건드리지 않습니다). 항목
+            이름은 {ITEM_MAX_LENGTH}자까지이며, 비워 두면 적요를 그대로 씁니다. 따로 나눌
+            필요가 없는 거래는 분류에서 <strong>기타</strong>를 고르면 됩니다(분류된 것으로 세어
+            미분류에서 빠집니다). 메인 계좌에서 고정비 · 비상금 계좌로 옮긴 돈이 받는 쪽
+            계좌에 찍힌 입금은 메인 쪽 이체와 금액 · 시각이 맞으면 자동으로 알아보고
+            미분류로 세지 않습니다.
           </p>
           {loaded.groups.length === 0 ? (
             <p className="text-sm text-zinc-600 dark:text-zinc-400">
@@ -190,18 +211,27 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
                 : `${loaded.month} 에 저장된 거래가 없습니다.`}
             </p>
           ) : (
-            <ul className="flex flex-col gap-3">
-              {loaded.groups.map((group) => (
-                <li key={`${group.direction}\u001f${group.key}`}>
-                  <GroupForm
-                    month={loaded.month as string}
-                    group={group}
-                    categories={categories}
-                    otherCategory={OTHER_CATEGORY}
-                  />
-                </li>
+            <div className="flex flex-col gap-6">
+              {byAccount(loaded.groups).map((section) => (
+                <section key={section.id} aria-labelledby={`account-${section.id}`} className="flex flex-col gap-3">
+                  <h2
+                    id={`account-${section.id}`}
+                    data-testid="account-section"
+                    className="text-sm font-semibold text-zinc-700 dark:text-zinc-300"
+                  >
+                    {section.label}
+                    <span className="ml-2 text-xs font-normal text-zinc-500">{section.groups.length}묶음</span>
+                  </h2>
+                  <ul className="flex flex-col gap-3">
+                    {section.groups.map((group) => (
+                      <li key={`${section.id}\u001f${group.direction}\u001f${group.key}`}>
+                        <GroupForm month={loaded.month as string} group={group} categories={categories} />
+                      </li>
+                    ))}
+                  </ul>
+                </section>
               ))}
-            </ul>
+            </div>
           )}
           <Link href={`/report?month=${loaded.month}`} className={`self-start ${PLAIN_LINK}`}>
             {loaded.month} 현금흐름표 보기

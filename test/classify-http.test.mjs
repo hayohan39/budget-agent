@@ -21,7 +21,7 @@ function request(body, { origin = `https://${HOST}`, type = 'application/json', 
   });
 }
 
-/** 가짜 DB. 쿼리를 기록하고, 그 달에는 `코인적립` 출금 한 건만 있다. */
+/** 가짜 DB. 쿼리를 기록하고, 그 달 메인 계좌에는 `코인적립` 출금 한 건만 있다. */
 function fakeClient() {
   const queries = [];
   return {
@@ -30,8 +30,10 @@ function fakeClient() {
       queries.push({ text, values });
       if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(text)) return { rows: [], rowCount: 0 };
       if (text.startsWith('SELECT pg_advisory_xact_lock(')) return { rows: [{}], rowCount: 1 };
-      if (text.startsWith('SELECT id, description, amount FROM transactions WHERE year_month')) {
-        return { rows: [{ id: '41', description: '코인적립', amount: '-200000' }], rowCount: 1 };
+      if (text.startsWith('SELECT t.id, t.description, t.amount') && text.includes('a.role = $2')) {
+        // 계좌는 역할로 거른다. 메인이 아닌 계좌에는 이 달 거래가 없다.
+        const rows = values[1] === 'main' ? [{ id: '41', description: '코인적립', amount: '-200000' }] : [];
+        return { rows, rowCount: rows.length };
       }
       if (text.includes('UPDATE transactions')) return { rows: [], rowCount: 1 };
       if (text.includes('INSERT INTO merchant_map')) return { rows: [], rowCount: 1 };
@@ -61,6 +63,7 @@ function deps({ session = { user: { email: ALLOWED } }, client = fakeClient() } 
 const GOOD = Object.freeze({
   scope: 'once',
   month: '2026-08',
+  account: 'main',
   key: '코인적립',
   direction: 'out',
   category: '저축',
@@ -139,6 +142,29 @@ test('classify: 방향은 in · out 만 받는다 — any · 빈 값 · 모르�
     assert.ok(!JSON.stringify(body).includes('OR 1=1'));
     assert.equal(d.calls.withClient, 0);
   }
+});
+
+test('classify: 계좌는 main · fixed · emergency 만 받는다 — 없거나 모르는 값은 400, 되비추지 않고 DB 에 닿지 않는다', async () => {
+  for (const account of [undefined, null, '', 'MAIN', '1', 1, '1288', "main' OR 1=1", ['main']]) {
+    const d = deps();
+    const { status, body } = await read(await handleClassifyPost(request({ ...GOOD, account }), d.value));
+    assert.equal(status, 400, String(account));
+    assert.equal(body.message, '계좌 구분이 올바르지 않습니다. 화면을 새로 고친 뒤 다시 시도해 주세요.');
+    assert.ok(!JSON.stringify(body).includes('OR 1=1'));
+    assert.ok(!JSON.stringify(body).includes('1288'));
+    assert.equal(d.calls.withClient, 0);
+  }
+});
+
+test('classify: 다른 계좌의 묶음으로 보내면 404 이고 아무것도 쓰지 않는다(계좌를 섞지 않는다)', async () => {
+  const d = deps();
+  const { status } = await read(await handleClassifyPost(request({ ...GOOD, account: 'fixed' }), d.value));
+  assert.equal(status, 404);
+  const select = d.client.queries.find((query) => query.text.startsWith('SELECT t.id'));
+  // 계좌 역할은 파라미터로만 나간다.
+  assert.deepEqual(select.values, ['2026-08', 'fixed']);
+  assert.ok(!select.text.includes('fixed'));
+  assert.ok(!d.client.queries.some((query) => /UPDATE transactions|INSERT INTO/.test(query.text)));
 });
 
 test('classify: 그 달에 그 방향의 묶음이 없으면 404 이고 아무것도 쓰지 않는다', async () => {
