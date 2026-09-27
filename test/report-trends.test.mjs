@@ -350,6 +350,9 @@ test('실제 DB: 여러 달 한 번 조회가 달별 조회와 입력 · 현금�
       main(day(3), -300_000, '비상금 계좌', { category: '비상금이체', is_transfer: true });
       rows.push(dbRow(3, day(3), yearMonth, 300_000, '홍길동'));
       rows.push(dbRow(3, day(4), yearMonth, 900, '이자', { category: '이자' }));
+      // 비상금 계좌 ↔ 금고 이동(isVaultMove). 여러 달 조회도 한 달 조회와 같이 금고저축 · 금고 인출로 봐야 한다.
+      rows.push(dbRow(3, day(4), yearMonth, -200_000, '비상금'));
+      rows.push(dbRow(3, day(10), yearMonth, 50_000, '비상금'));
       rows.push(dbRow(2, day(5), yearMonth, -230_000, '가상관리비', { category: '고정비', item: '관리비' }));
       main(day(6), -500_000, 'IRP', { category: '저축' });
       main(day(7), -870_000, '가상카드주식회사', { category: '카드대금' });
@@ -379,6 +382,14 @@ test('실제 DB: 여러 달 한 번 조회가 달별 조회와 입력 · 현금�
       const single = await loadMonthlyInputs(client, input.yearMonth);
       assert.deepEqual(input, single, input.yearMonth);
       assert.deepEqual(aggregateMonthly(input), await buildMonthlyReport(client, input.yearMonth), input.yearMonth);
+      if (input.rows.length > 0) {
+        // 금고 이동이 여러 달 경로에서도 금고저축 · 금고 인출로 잡히고 미분류로 세지 않는다.
+        const report = aggregateMonthly(input);
+        const emergency = report.계좌블록.find((block) => block.role === 'emergency');
+        assert.deepEqual(emergency.금고저축, { total: -200_000, count: 1 }, input.yearMonth);
+        assert.deepEqual(emergency.금고인출, { total: 50_000, count: 1 }, input.yearMonth);
+        assert.equal(report.미분류.금고이동, 2, input.yearMonth);
+      }
     }
 
     for (const range of [null, 1, 2, 3, 6, 12]) {

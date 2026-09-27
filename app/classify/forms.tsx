@@ -25,6 +25,7 @@ export type ClassifyGroup = {
   total: number;
   unclassified: number;
   transferIn: number;
+  vault: number;
   transfer: number;
   manual: number;
   mixed: boolean;
@@ -307,6 +308,13 @@ export function GroupForm({
           이 중 {group.transferIn}건은 메인 계좌에서 옮겨 온 돈(내 계좌 간 이체)으로 확인됐습니다.
           분류하지 않아도 현금흐름표의 ‘{accountLabel(group.account)}’ 입금으로 들어가므로 미분류로
           세지 않습니다.
+        </p>
+      ) : null}
+      {group.vault > 0 ? (
+        <p className="text-xs text-sky-700 dark:text-sky-400">
+          {group.direction === "out"
+            ? `이 중 ${group.vault}건은 ${accountLabel(group.account)}에 연결된 금고로 옮긴 돈(금고저축)으로 봅니다. 분류와 무관하게 현금흐름표 ‘${accountLabel(group.account)}’ 표의 ‘금고저축’ 줄로 들어가고 쓴 돈(집행)으로 세지 않으므로, 미분류로도 세지 않습니다.`
+            : `이 중 ${group.vault}건은 ${accountLabel(group.account)}에 연결된 금고에서 꺼낸 돈(금고 인출)으로 봅니다. 분류와 무관하게 현금흐름표 ‘${accountLabel(group.account)}’ 표의 ‘금고 인출’ 줄로 들어가고 메인에서 온 입금으로 세지 않으므로, 미분류로도 세지 않습니다.`}
         </p>
       ) : null}
       {group.transfer > 0 ? (
