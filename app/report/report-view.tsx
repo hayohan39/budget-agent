@@ -352,6 +352,11 @@ function VariableTable({
  * 원본 순서: 입금 → 항목 → 합계(집행) → 보정 → 잔액.
  * `보정` 자리에는 실거래로 잡히는 **이자**가 온다. 그리고 원본에는 없던
  * `순증감` 을 한 줄 더 둔다 — 이자가 이 계좌의 집행을 상계한 값이다.
+ *
+ * 계좌에 연결된 금고로 옮긴 돈 · 금고에서 꺼낸 돈이 있는 달에는 `금고저축` ·
+ * `금고 인출` 줄이 더 붙는다(2026-09). 이 돈은 집행도 입금도 아니라 순증감에
+ * 들어가지 않는다 — 순증감은 금고까지 합친 이 계좌 돈의 증감이고, `잔액` 은
+ * 명세서의 계좌 잔액(금고 제외)이다.
  */
 function AccountTable({
   block,
@@ -364,6 +369,8 @@ function AccountTable({
   const lines = block.항목 as Line[];
 
   const title = `${block.nickname} 계좌`;
+  // 계좌 ↔ 금고 이동이 있는 달에만 금고 줄을 그린다(lib/report/monthly.mjs 의 isVaultMove).
+  const hasVault = block.금고저축.count > 0 || block.금고인출.count > 0;
 
   return (
     <table className={BOX} data-testid="account-table">
@@ -411,14 +418,37 @@ function AccountTable({
         )}
         <WideRow label="합계" value={flow(block.집행.total)} note="집행" />
         <WideRow label="이자" value={flow(block.이자.total)} />
-        <WideRow label="순증감" value={flow(block.순증감)} note="입금 + 이자 − 집행" tone="plain" />
+        {hasVault ? (
+          <>
+            <WideRow
+              label="금고저축"
+              value={flow(block.금고저축.total)}
+              note={`계좌 → 금고 ${block.금고저축.count}건`}
+            />
+            {block.금고인출.count > 0 ? (
+              <WideRow
+                label="금고 인출"
+                value={flow(block.금고인출.total)}
+                note={`금고 → 계좌 ${block.금고인출.count}건`}
+              />
+            ) : null}
+          </>
+        ) : null}
+        <WideRow
+          label="순증감"
+          value={flow(block.순증감)}
+          note={hasVault ? "입금 + 이자 − 집행 · 금고 포함" : "입금 + 이자 − 집행"}
+          tone="plain"
+        />
         <WideRow
           label="잔액"
           value={balance?.derived === true ? plain(balance.closing) : "—"}
           tone={tone}
           note={
             balance === undefined || balance.derived
-              ? undefined
+              ? hasVault
+                ? "계좌 · 금고 제외"
+                : undefined
               : `(${balanceReasonText(balance.reason)})`
           }
         />
@@ -640,7 +670,9 @@ export function ReportView({
           <p className="text-xs text-zinc-500">
             이 계좌들의 입금은 메인에서 간 돈이라 오른쪽 종합정산의 수입으로 세지
             않습니다. 이자도 수입으로 올리지 않고 <strong>그 계좌 안에서 집행을
-            상계</strong>합니다(순증감).
+            상계</strong>합니다(순증감). 비상금 계좌에서 적요 ‘비상금’으로 나간 돈은 그 계좌에
+            연결된 <strong>금고로 옮긴 돈(금고저축)</strong>이라 집행으로 세지 않고, 금고에서
+            꺼낸 돈도 입금으로 세지 않습니다.
           </p>
         </div>
 
@@ -782,6 +814,12 @@ export function ReportView({
             메인 계좌에서 고정비 · 비상금 계좌로 옮긴 돈이 받는 쪽 계좌에 찍힌 입금{" "}
             {report.미분류.계좌간이체입금}건은 분류가 없어도 위 계좌 표의 ‘입금’으로 세므로
             미분류에서 뺐습니다.
+          </p>
+        ) : null}
+        {report.미분류.금고이동 > 0 ? (
+          <p className="text-xs text-zinc-500">
+            비상금 계좌와 연결된 금고 사이를 옮긴 돈 {report.미분류.금고이동}건은 분류가 없어도 위
+            계좌 표의 ‘금고저축’ · ‘금고 인출’로 세므로 미분류에서 뺐습니다.
           </p>
         ) : null}
         <p className="text-xs text-zinc-500">
