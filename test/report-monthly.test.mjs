@@ -64,7 +64,7 @@ function report(rows, extra = {}) {
 
 test('부호는 저장된 그대로다 — 수입 +, 지출 −', () => {
   const result = report([
-    row({ id: '1', amount: '5900000', description: '홍길동' }),
+    row({ id: '1', amount: '5900000', description: '홍길동', category: '수입' }),
     row({ id: '2', amount: '-800000', category: '주거비', description: '대출 이자' }),
   ]);
 
@@ -76,8 +76,8 @@ test('부호는 저장된 그대로다 — 수입 +, 지출 −', () => {
 
 test('BIGINT 가 문자열로 와도 합계가 맞는다', () => {
   const result = report([
-    row({ id: '1', amount: '1' }),
-    row({ id: '2', amount: '2' }),
+    row({ id: '1', amount: '1', category: '수입' }),
+    row({ id: '2', amount: '2', category: '수입' }),
   ]);
 
   // 문자열을 이어 붙였다면 12 또는 '12' 가 된다.
@@ -87,8 +87,8 @@ test('BIGINT 가 문자열로 와도 합계가 맞는다', () => {
 
 test('금액은 number·bigint 로 와도 똑같이 처리한다', () => {
   const result = report([
-    row({ id: '1', amount: 34000 }),
-    row({ id: '2', amount: 1000000n }),
+    row({ id: '1', amount: 34000, category: '수입' }),
+    row({ id: '2', amount: 1000000n, category: '수입' }),
   ]);
   assert.equal(result.수입.total, 1034000);
 });
@@ -97,7 +97,7 @@ test('금액은 number·bigint 로 와도 똑같이 처리한다', () => {
 
 test('메인에서 나간 계좌 간 이동은 수입에도 지출에도 들어가지 않는다', () => {
   const result = report([
-    row({ id: '1', amount: '5000000', description: '홍길동' }),
+    row({ id: '1', amount: '5000000', description: '홍길동', category: '수입' }),
     row({ id: '2', amount: '-500000', description: '비상금 계좌', category: '비상금이체', is_transfer: true }),
     row({ id: '3', amount: '-1000000', description: '고정비 계좌', category: '고정비이체', is_transfer: true }),
   ]);
@@ -105,7 +105,8 @@ test('메인에서 나간 계좌 간 이동은 수입에도 지출에도 들어�
   assert.equal(result.수입.total, 5000000);
   assert.equal(result.고정지출1.total, 0);
   assert.equal(result.고정지출2.total, 0);
-  assert.equal(result.변동지출.total, 0);
+  assert.equal(result.카드비.total, 0);
+  assert.equal(result.변동비.total, 0);
 
   // 자기 줄로 빠진다.
   assert.equal(result.계좌간이동.total, -1500000);
@@ -142,7 +143,7 @@ test('is_transfer 플래그만 서 있어도 이동으로 본다', () => {
   const result = report([flagged]);
   assert.equal(result.계좌간이동.total, -500000);
   assert.deepEqual(result.계좌간이동.items, [{ key: '기타', total: -500000, count: 1 }]);
-  assert.equal(result.변동지출.기타.total, 0);
+  assert.equal(result.변동비.total, 0);
 });
 
 test('분류만 서 있고 is_transfer 가 비어도 이동으로 본다', () => {
@@ -312,20 +313,26 @@ test('값이 없는 섹션 줄도 0 으로 남는다(표 모양이 흔들리지 
   assert.equal(result.종합정산.실현순증감, 0);
 });
 
-test('규칙에 안 걸린 출금은 변동지출 기타로 간다', () => {
+test('규칙에 안 걸린 출금은 변동비의 일회성 지출로 간다', () => {
   const result = report([
     row({ id: '1', amount: '-3780', description: '코웨이08월렌탈', txn_type: 'CMS출금' }),
   ]);
 
-  assert.equal(result.변동지출.기타.total, -3780);
-  assert.equal(result.변동지출.total, -3780);
+  assert.deepEqual(result.변동비.일회성지출, { total: -3780, count: 1 });
+  assert.equal(result.변동비.total, -3780);
+  assert.equal(result.카드비.total, 0);
   assert.equal(result.미분류.count, 1);
 });
 
-test('미분류 입금은 수입에 들어가되 미분류 건수로도 잡힌다', () => {
+test('미분류 입금은 수입이 아니라 변동비의 일회성 수입에 들어가고 미분류 건수로도 잡힌다', () => {
   const result = report([row({ id: '1', amount: '3500000', description: '김철수' })]);
 
-  assert.deepEqual(result.수입.items, [{ key: '미분류', total: 3500000, count: 1 }]);
+  assert.deepEqual(result.수입.items, []);
+  assert.equal(result.수입.total, 0);
+  assert.deepEqual(result.변동비.일회성수입, { total: 3500000, count: 1 });
+  assert.deepEqual(result.항목별.변동비, [
+    { category: '미분류', item: '김철수', direction: 'in', total: 3500000, count: 1 },
+  ]);
   assert.equal(result.미분류.count, 1);
 });
 
@@ -339,17 +346,20 @@ test('카드대금을 카드사별로 묶는다', () => {
     row({ id: '4', amount: '-1901314', description: '현대카드', txn_type: '펌뱅킹출금', category: '카드대금' }),
   ]);
 
-  assert.deepEqual(result.변동지출.카드대금.issuers, [
+  assert.deepEqual(result.카드비.issuers, [
     { issuer: '삼성카드', total: -3175334, count: 2 },
     { issuer: '현대카드', total: -1901314, count: 1 },
     { issuer: 'KB국민카드', total: -14050, count: 1 },
   ]);
-  assert.equal(result.변동지출.카드대금.total, -5090698);
-  assert.equal(result.변동지출.카드대금.count, 4);
+  assert.equal(result.카드비.total, -5090698);
+  assert.equal(result.카드비.count, 4);
+  assert.equal(result.종합정산.카드비, -5090698);
+  // 카드비에는 카드대금만 — 변동비는 비어 있다.
+  assert.equal(result.변동비.total, 0);
   // 카드사별 합계가 카드대금 합계와 같다(PLAN.md 검증 6).
   assert.equal(
-    result.변동지출.카드대금.issuers.reduce((sum, item) => sum + item.total, 0),
-    result.변동지출.카드대금.total,
+    result.카드비.issuers.reduce((sum, item) => sum + item.total, 0),
+    result.카드비.total,
   );
 });
 
@@ -358,7 +368,7 @@ test('카드대금을 카드사별로 묶는다', () => {
 test('수동 보정은 집계에 없다 — 입력으로 넘겨도 무시하고 종합정산의 합계는 실현순증감이다', () => {
   // 사용자 요청(2026-09): "보정은 수동으로 기입할때 생겼던 것들이야. 이제는 필요없으니 삭제해줘."
   const result = report(
-    [row({ id: '1', amount: '1000000' })],
+    [row({ id: '1', amount: '1000000', category: '수입' })],
     { adjustments: [{ target: '수입', amount: '-50000', reason: '이월 정산' }] },
   );
 
@@ -367,7 +377,8 @@ test('수동 보정은 집계에 없다 — 입력으로 넘겨도 무시하고 
     '수입',
     '고정지출1',
     '고정지출2',
-    '변동지출',
+    '카드비',
+    '변동비',
     '계좌간이동',
     '실현순증감',
   ]);
@@ -537,12 +548,8 @@ test('결과에 메모·거래 일시·잔액이 들어가지 않고, 적요는 
     assert.ok(!withoutLines.includes(description), `${description} 이(가) 항목 줄 밖에 나왔다`);
   }
   assert.deepEqual(
-    항목별.수입.map((line) => line.item),
-    ['김철수'],
-  );
-  assert.deepEqual(
-    항목별.변동지출.map((line) => line.item),
-    ['이영희'],
+    항목별.변동비.map((line) => line.item),
+    ['김철수', '이영희'],
   );
 });
 
@@ -583,13 +590,17 @@ async function fixtureRows() {
 test('fixture 한 달치의 섹션 합계', async () => {
   const result = report(await fixtureRows());
 
-  // 수입: 34,000 + 5,900,000 + 1,045,850 + 3,500,000 + 1,000,000 + 263(이자)
-  assert.equal(result.수입.total, 11480113);
+  // 수입: 이자 263 뿐이다. 나머지 입금 34,000 + 5,900,000 + 1,045,850 + 3,500,000 +
+  // 1,000,000 은 규칙에 걸리지 않은 미분류라 분류하기 전까지 변동비의 일회성 수입에 있다.
+  assert.equal(result.수입.total, 263);
+  assert.deepEqual(result.변동비.일회성수입, { total: 11479850, count: 5 });
   // 저축 3,350,000 + 용돈 1,000,000 + 주거비 800,000
   assert.equal(result.고정지출1.total, -5150000);
   assert.equal(result.고정지출2.total, 0); // 용돈 규칙이 생긴 뒤로 고정비로 새지 않는다
-  assert.equal(result.변동지출.카드대금.total, -5090698);
-  assert.equal(result.변동지출.기타.total, -181280); // 코웨이 · 모임원송금 2건
+  assert.equal(result.카드비.total, -5090698);
+  // 코웨이 · 모임원송금 등 미분류 출금 3건(금액이 있는 것은 2건).
+  assert.deepEqual(result.변동비.일회성지출, { total: -181280, count: 3 });
+  assert.equal(result.변동비.total, 11479850 - 181280);
   assert.equal(result.계좌간이동.total, -1500000);
   assert.equal(result.미분류.count, 8);
   assert.equal(result.거래건수, 24);
@@ -619,7 +630,8 @@ test('섹션 합계가 메인 계좌 금액 총합과 같다(항등식)', async 
     result.종합정산.수입 +
       result.종합정산.고정지출1 +
       result.종합정산.고정지출2 +
-      result.종합정산.변동지출 +
+      result.종합정산.카드비 +
+      result.종합정산.변동비 +
       result.종합정산.계좌간이동,
     result.종합정산.실현순증감,
   );
@@ -738,10 +750,11 @@ test('저장된 한 달치로 같은 숫자가 나온다', async (t) => {
 
     assert.equal(result.yearMonth, YM);
     assert.equal(result.거래건수, 24);
-    assert.equal(result.수입.total, 11480113);
-    assert.equal(result.변동지출.카드대금.total, -5090698);
+    assert.equal(result.수입.total, 263);
+    assert.equal(result.변동비.일회성수입.total, 11479850);
+    assert.equal(result.카드비.total, -5090698);
     assert.deepEqual(
-      result.변동지출.카드대금.issuers.map((item) => item.issuer),
+      result.카드비.issuers.map((item) => item.issuer),
       ['삼성카드', '현대카드', 'KB국민카드'],
     );
     assert.equal(result.계좌간이동.total, -1500000);

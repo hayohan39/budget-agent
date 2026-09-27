@@ -96,8 +96,8 @@ test('stripMonth 는 boolean 만 받는다 — 생략하면 false, boolean 이 �
 });
 
 test('허용 목록 밖의 분류는 거부한다', () => {
-  // '기타' 는 이제 허용 목록에 있다(아래 루프가 통과를 확인한다). '미분류' 는 여전히 아니다.
-  for (const category of ['손수정', '', ' 고정비', '미분류', ' 기타', '기타 ', null, 1, ['고정비']]) {
+  // '기타' 는 변동비로 합쳐 더는 고를 수 없다(2026-09). '미분류' 도 아니다.
+  for (const category of ['손수정', '', ' 고정비', '미분류', '기타', ' 기타', '기타 ', null, 1, ['고정비']]) {
     const parsed = parseClassifyRequest(valid({ category }));
     assert.equal(parsed.ok, false, String(category));
     assert.equal(parsed.error, 'badCategory');
@@ -881,11 +881,11 @@ test('동시 쓰기: any 수정 도중 끼어든 같은 키의 방향 매핑이 
     const edit = updateMapping(gated.client, { key: '김철수', direction: 'any', category: '수입', item: null });
     await gated.paused;
 
-    // T2: 같은 키의 출금 묶음을 앞으로도 기타로. 다른 기본키 행이라 행 잠금으로는
+    // T2: 같은 키의 출금 묶음을 앞으로도 변동비로. 다른 기본키 행이라 행 잠금으로는
     // T1 과 줄 서지 않는다 — 키 단위 잠금이 있으면 여기서 기다린다.
     const always = applyClassification(
       second,
-      valid({ scope: 'always', key: '김철수', direction: 'out', category: '기타', item: null }),
+      valid({ scope: 'always', key: '김철수', direction: 'out', category: '변동비', item: null }),
     );
     await settledOrWaitingOnLock(client, secondPid, always);
 
@@ -894,15 +894,15 @@ test('동시 쓰기: any 수정 도중 끼어든 같은 키의 방향 매핑이 
     assert.equal(editOutcome.ok, true);
     assert.equal(alwaysOutcome.ok, true);
 
-    // 매핑은 any: 수입, out: 기타. 출처 map 인 행은 자기를 다스리는 매핑과 같아야 한다.
+    // 매핑은 any: 수입, out: 변동비. 출처 map 인 행은 자기를 다스리는 매핑과 같아야 한다.
     assert.deepEqual(await mapRows(client), [
       ['김철수', 'any', '수입', null],
-      ['김철수', 'out', '기타', null],
+      ['김철수', 'out', '변동비', null],
     ]);
     const mapped = (await directedRowsOf(client, '김철수')).filter((row) => row[4] === 'map');
     assert.ok(mapped.some((row) => row[1] === 'out'), '출금 map 행이 있어야 검사가 의미 있다');
     for (const [, direction, category] of mapped) {
-      assert.equal(category, direction === 'out' ? '기타' : '수입', `${direction} 행이 매핑과 어긋난다`);
+      assert.equal(category, direction === 'out' ? '변동비' : '수입', `${direction} 행이 매핑과 어긋난다`);
     }
   });
 });
@@ -994,11 +994,12 @@ test('동시 쓰기: stripMonth 앞으로도는 지운 키로 잠가야 같은 �
   });
 });
 
-// ── 기타 ───────────────────────────────────────────────────────────────────
+// ── 변동비(일회성 수입 · 지출) · 예전 기타 ──────────────────────────────
 
-test('기타로 고른 묶음은 분류된 것이다 — 미분류만 보기와 미분류 건수에서 빠진다', () => {
+test('예전 기타로 저장된 묶음은 변동비로 보인다 — 분류된 것이고, 변동비와 섞여도 혼합이 아니다', () => {
   const rows = [
     { description: '이영희', amount: '-7500', category: '기타', category_source: 'manual' },
+    { description: '이영희', amount: '-2500', category: '변동비', category_source: 'manual' },
     { description: '김철수', amount: '34000', category: null },
   ];
   assert.deepEqual(
@@ -1006,49 +1007,88 @@ test('기타로 고른 묶음은 분류된 것이다 — 미분류만 보기와 
     ['김철수'],
   );
   const other = groupRows(rows, CLASSIFY_FILTERS.all).find((group) => group.key === '이영희');
-  assert.deepEqual([other.category, other.unclassified, other.mixed], ['기타', 0, false]);
+  assert.deepEqual([other.category, other.unclassified, other.mixed], ['변동비', 0, false]);
 });
 
-test('분류 기타: 이번만 · 앞으로도 모두 되고, 앞으로도는 그 방향의 기타 매핑을 저장한다', async (t) => {
-  await withScratchDatabase(t, 'classify_other', async (client) => {
+test('분류 변동비: 입금 · 출금 모두 고를 수 있고, 현금흐름표 변동비의 일회성 수입 · 지출로 간다', async (t) => {
+  await withScratchDatabase(t, 'classify_variable', async (client) => {
     await importFixture(client);
+    assert.equal(await countUnclassified(client, '2026-08'), 8);
+
+    // 예전 기타는 더는 쓸 수 없다.
+    const legacy = await applyClassification(
+      client,
+      valid({ scope: 'always', key: '이영희', direction: 'out', category: '기타', item: null }),
+    );
+    assert.equal(legacy.ok, false);
+    assert.equal(legacy.error, 'badCategory');
     assert.equal(await countUnclassified(client, '2026-08'), 8);
 
     // 출금 묶음(이영희) — 앞으로도.
     const always = await applyClassification(
       client,
-      valid({ scope: 'always', key: '이영희', direction: 'out', category: '기타', item: null }),
+      valid({ scope: 'always', key: '이영희', direction: 'out', category: '변동비', item: null }),
     );
     assert.deepEqual(always, { ok: true, updated: 1, mapped: true });
-    assert.deepEqual(await mapRows(client), [['이영희', 'out', '기타', null]]);
+    assert.deepEqual(await mapRows(client), [['이영희', 'out', '변동비', null]]);
     assert.equal(await countUnclassified(client, '2026-08'), 7);
 
     // 입금 묶음(김철수 입금 3건) — 이번만. 출금 1건은 미분류로 남는다.
     const once = await applyClassification(
       client,
-      valid({ scope: 'once', key: '김철수', direction: 'in', category: '기타', item: null }),
+      valid({ scope: 'once', key: '김철수', direction: 'in', category: '변동비', item: null }),
     );
     assert.deepEqual(once, { ok: true, updated: 3, mapped: false });
     assert.equal(await countUnclassified(client, '2026-08'), 4);
 
-    const unclassified = await listClassifyGroups(client, '2026-08', CLASSIFY_FILTERS.unclassified);
-    assert.ok(!unclassified.some((group) => group.key === '이영희'));
-    assert.deepEqual(
-      unclassified.filter((group) => group.key === '김철수').map((group) => group.direction),
-      ['out'],
-    );
-
     const report = await buildMonthlyReport(client, '2026-08');
     assert.equal(report.미분류.count, 4);
     assert.deepEqual(
-      report.항목별.변동지출.find((line) => line.category === '기타'),
-      { category: '기타', item: '이영희', direction: 'out', total: -7500, count: 1 },
+      report.항목별.변동비.filter((line) => line.category === '변동비'),
+      [
+        { category: '변동비', item: '김철수', direction: 'in', total: 4534000, count: 3 },
+        { category: '변동비', item: '이영희', direction: 'out', total: -7500, count: 1 },
+      ],
     );
+    // 일회성 수입은 수입 섹션에 없다. 남은 미분류 출금(김철수)은 변동비에 미분류 줄로 있다.
+    assert.ok(report.항목별.수입.every((line) => line.item !== '김철수'));
     assert.deepEqual(
-      report.항목별.수입.find((line) => line.category === '기타'),
-      { category: '기타', item: '김철수', direction: 'in', total: 4534000, count: 3 },
+      report.항목별.변동비.find((line) => line.category === '미분류' && line.item === '김철수'),
+      { category: '미분류', item: '김철수', direction: 'out', total: -170000, count: 1 },
     );
     assert.equal(verifyMonthlyReport(report).ok, true);
+  });
+});
+
+test('예전 기타 매핑 · 행은 변동비로 읽히고, 고쳐 저장하면 변동비로 바뀐다', async (t) => {
+  await withScratchDatabase(t, 'classify_legacy_other', async (client) => {
+    await importFixture(client);
+    // 합치기 전에 저장된 값처럼 직접 넣는다(쓰기 API 는 이제 기타를 받지 않는다).
+    await client.query(`INSERT INTO merchant_map (description, direction, category) VALUES ('이영희', 'out', '기타')`);
+    await classifyStored(client);
+
+    const listed = await listMappings(client);
+    assert.deepEqual(
+      listed.map((mapping) => [mapping.key, mapping.direction, mapping.category]),
+      [['이영희', 'out', '변동비']],
+    );
+    const group = (await listClassifyGroups(client, '2026-08', CLASSIFY_FILTERS.all)).find(
+      (entry) => entry.key === '이영희',
+    );
+    assert.equal(group.category, '변동비');
+
+    const report = await buildMonthlyReport(client, '2026-08');
+    assert.deepEqual(
+      report.항목별.변동비.find((line) => line.item === '이영희'),
+      { category: '변동비', item: '이영희', direction: 'out', total: -7500, count: 1 },
+    );
+
+    // 화면에서 그대로 저장하면(드롭다운이 변동비를 미리 고른다) 저장된 값도 변동비가 된다.
+    const saved = await updateMapping(client, { key: '이영희', direction: 'out', category: '변동비', item: null });
+    assert.equal(saved.ok, true);
+    assert.deepEqual(await mapRows(client), [['이영희', 'out', '변동비', null]]);
+    const stored = await client.query(`SELECT DISTINCT category FROM transactions WHERE description = '이영희'`);
+    assert.deepEqual(stored.rows, [{ category: '변동비' }]);
   });
 });
 
@@ -1161,7 +1201,9 @@ test('DB: 메인 → 고정비 · 비상금 이체의 받는 쪽 입금은 /clas
     assert.equal(report.미분류.count, 2);
     assert.equal(report.미분류.계좌간이체입금, 2);
     // 리포트는 받는 쪽 입금을 원래대로 그 계좌 블록의 입금으로 센다(수입이 아니다).
-    assert.equal(report.수입.total, 200000);
+    // 메인의 짝 없는 미분류 입금(홍길동)은 분류하기 전까지 변동비의 일회성 수입이다.
+    assert.equal(report.수입.total, 0);
+    assert.deepEqual(report.변동비.일회성수입, { total: 200000, count: 1 });
     const fixed = report.계좌블록.find((block) => block.role === 'fixed');
     const emergency = report.계좌블록.find((block) => block.role === 'emergency');
     assert.equal(fixed.입금.total, 1000000);
@@ -1175,7 +1217,7 @@ test('DB: 이번만은 그 계좌의 묶음만 바꾼다 — 다른 계좌의 �
 
     const outcome = await applyClassification(
       client,
-      valid({ month: '2026-10', account: 'emergency', key: '홍길동', direction: 'in', category: '기타', item: null }),
+      valid({ month: '2026-10', account: 'emergency', key: '홍길동', direction: 'in', category: '변동비', item: null }),
     );
     assert.deepEqual(outcome, { ok: true, updated: 2, mapped: false });
 
@@ -1187,8 +1229,8 @@ test('DB: 이번만은 그 계좌의 묶음만 바꾼다 — 다른 계좌의 �
       byAccount.rows.map((row) => [row.role, row.category]),
       [
         ['fixed', null],
-        ['emergency', '기타'],
-        ['emergency', '기타'],
+        ['emergency', '변동비'],
+        ['emergency', '변동비'],
         ['main', null],
       ],
     );
@@ -1196,7 +1238,7 @@ test('DB: 이번만은 그 계좌의 묶음만 바꾼다 — 다른 계좌의 �
     // 그 계좌에 없는 묶음은 거부한다(고정비 계좌에는 '고정비 계좌' 출금이 없다).
     const missing = await applyClassification(
       client,
-      valid({ month: '2026-10', account: 'fixed', key: '고정비 계좌', direction: 'out', category: '기타', item: null }),
+      valid({ month: '2026-10', account: 'fixed', key: '고정비 계좌', direction: 'out', category: '변동비', item: null }),
     );
     assert.equal(missing.error, 'keyNotFound');
   });

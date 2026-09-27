@@ -6,7 +6,10 @@
 //
 //   좌: 수입 · 저축 · 용돈 · 주거비      (메인에서 바로 나가는 돈)
 //   중: 고정비 계좌 · 비상금 계좌        (입금 / 집행 / 이자 / 잔액)
-//   우: 변동비(카드사별) · 종합정산 · 메인 계좌 잔액
+//   우: 카드비(카드사별) · 변동비(일회성 수입 · 지출) · 종합정산 · 메인 계좌 잔액
+//
+// 원본의 `변동비` 표는 2026-09 에 둘로 나눴다(사용자 요청). `카드비` 에는 카드대금만,
+// `변동비` 에는 일회성 항목(입금 · 출금 모두)과 **아직 분류하지 않은 행**이 온다.
 //
 // 원본에서 확인한 항등식 두 개를 그대로 화면에 세운다.
 //
@@ -191,6 +194,28 @@ function WideRow({
   );
 }
 
+/** 항목 줄의 가운데 칸 — 항목 이름, 그 아래 분류 · 방향 꼬리표와 건수. */
+function ItemCell({ item }: { item: SectionItem }) {
+  return (
+    <td className={`${CELL} break-keep wrap-anywhere`}>
+      <span className="block">{item.key}</span>
+      <span className="block text-xs text-zinc-500">
+        {item.tag !== undefined ? (
+          <span className="mr-1 rounded bg-zinc-100 px-1 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+            {item.tag}
+          </span>
+        ) : null}
+        {item.flow !== undefined ? (
+          <span className="mr-1 rounded bg-sky-50 px-1 text-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+            {item.flow}
+          </span>
+        ) : null}
+        {item.count}건
+      </span>
+    </td>
+  );
+}
+
 /**
  * 원본 좌측/우측 그룹의 표 하나.
  *
@@ -233,27 +258,86 @@ function KindTable({
                   {kind}
                 </th>
               ) : null}
-              <td className={`${CELL} break-keep wrap-anywhere`}>
-                <span className="block">{item.key}</span>
-                <span className="block text-xs text-zinc-500">
-                  {item.tag !== undefined ? (
-                    <span className="mr-1 rounded bg-zinc-100 px-1 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-                      {item.tag}
-                    </span>
-                  ) : null}
-                  {item.flow !== undefined ? (
-                    <span className="mr-1 rounded bg-sky-50 px-1 text-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
-                      {item.flow}
-                    </span>
-                  ) : null}
-                  {item.count}건
-                </span>
-              </td>
+              <ItemCell item={item} />
               <td className={NUM}>{flow(item.total)}</td>
             </tr>
           ))
         )}
         <WideRow label="합계" value={flow(total)} tone={tone ?? "plain"} />
+      </tbody>
+    </table>
+  );
+}
+
+/**
+ * 변동비 표 — 일회성 수입 줄과 일회성 지출 줄을 **따로** 세운다.
+ *
+ * `종류` 칸이 방향이다(`일회성 수입` · `일회성 지출`). 같은 항목의 입금과 출금은
+ * 서로 다른 줄이고 한 줄 안에서 상계하지 않는다. 아직 분류하지 않은 행은 `미분류`
+ * 꼬리표를 달고 여기 보인다. 아래에 방향별 소계와 합계(순액)를 둔다 — 합계가
+ * 종합정산의 `변동비` 줄과 같은 값이다.
+ */
+function VariableTable({
+  lines,
+  section,
+  caption,
+}: {
+  lines: Line[];
+  section: MonthlyReport["변동비"];
+  caption: string;
+}) {
+  const groups: Array<{ kind: string; direction: Line["direction"]; items: SectionItem[] }> = [
+    { kind: "일회성 수입", direction: "in", items: [] },
+    { kind: "일회성 지출", direction: "out", items: [] },
+  ];
+  for (const group of groups) {
+    group.items = linesAsItems(
+      lines.filter((line) => line.direction === group.direction),
+      "변동비",
+      group.direction,
+    );
+  }
+  const shown = groups.filter((group) => group.items.length > 0);
+
+  return (
+    <table className={BOX} data-testid="variable-table">
+      <caption className="sr-only">{caption}</caption>
+      <thead>
+        <tr>
+          <th scope="colgroup" colSpan={3} className={`${CELL} text-left text-sm font-semibold`}>
+            변동비
+            <span className="ml-1 text-xs font-normal text-zinc-500">일회성 수입 · 지출 · 미분류 포함</span>
+          </th>
+        </tr>
+        <Head3 />
+      </thead>
+      <tbody>
+        {shown.length === 0 ? (
+          <tr>
+            <th scope="row" className={`${CELL} whitespace-nowrap text-center`}>
+              변동비
+            </th>
+            <td className={CELL}>&nbsp;</td>
+            <td className={NUM}>&nbsp;</td>
+          </tr>
+        ) : (
+          shown.flatMap((group) =>
+            group.items.map((item, index) => (
+              <tr key={`${group.direction}\u001f${item.tag ?? ""}\u001f${item.key}`}>
+                {index === 0 ? (
+                  <th scope="row" rowSpan={group.items.length} className={`${CELL} whitespace-nowrap text-center`}>
+                    {group.kind}
+                  </th>
+                ) : null}
+                <ItemCell item={item} />
+                <td className={NUM}>{flow(item.total)}</td>
+              </tr>
+            )),
+          )
+        )}
+        <WideRow label="일회성 수입" value={flow(section.일회성수입.total)} note="소계" />
+        <WideRow label="일회성 지출" value={flow(section.일회성지출.total)} note="소계" />
+        <WideRow label="합계" value={flow(section.total)} tone="plain" />
       </tbody>
     </table>
   );
@@ -440,25 +524,17 @@ export function ReportView({
   const fixed1 = report.고정지출1.items as SectionItem[];
   const fixed2 = report.고정지출2.items as SectionItem[];
   const moves = report.계좌간이동.items as SectionItem[];
-  const card = report.변동지출.카드대금;
-  const lines = report.항목별 as Record<"수입" | "고정지출1" | "고정지출2" | "변동지출", Line[]>;
+  const card = report.카드비;
+  const lines = report.항목별 as Record<"수입" | "고정지출1" | "고정지출2" | "카드비" | "변동비", Line[]>;
   const mainBalance = report.계좌별잔액변화.find((entry) => entry.role === "main");
 
-  // 우측 변동비 표 — 원본은 카드사별 줄만 있다. 카드가 아닌 변동지출(`기타`)은
-  // 원본에 자리가 없지만 버리면 합계가 맞지 않으므로 줄을 하나 더 둔다.
-  // 카드가 아닌 변동지출은 (분류, 항목) 줄로 풀어 쓴다. 미분류 출금은 `미분류`
-  // 꼬리표가 붙은 채로 적요가 항목 이름이 된다.
-  const otherVariable = linesAsItems(
-    lines.변동지출.filter((line) => line.category !== "카드대금"),
-  );
-  const variableItems: SectionItem[] = [
-    ...card.issuers.map((issuer) => ({
-      key: issuer.issuer,
-      total: issuer.total,
-      count: issuer.count,
-    })),
-    ...otherVariable,
-  ];
+  // 우측 카드비 표 — 원본의 변동비 표처럼 카드사별 줄만 있다. 일회성 항목은
+  // 아래 변동비 표(VariableTable)로 따로 간다.
+  const cardItems: SectionItem[] = card.issuers.map((issuer) => ({
+    key: issuer.issuer,
+    total: issuer.total,
+    count: issuer.count,
+  }));
   const fixed2Shown = fixed2.filter((item) => item.count > 0);
 
   // 종합정산. 원본의 `고정비` · `비상금` 줄은 그 계좌로 **옮긴 돈**이다.
@@ -474,7 +550,8 @@ export function ReportView({
     { label: "주거비", value: itemTotal(fixed1, "주거비") },
     { label: "고정비", value: 고정비, note: "계좌 이체 포함" },
     { label: "비상금", value: 비상금, note: "계좌 이체 포함" },
-    { label: "변동비", value: report.종합정산.변동지출 },
+    { label: "카드비", value: report.종합정산.카드비 },
+    { label: "변동비", value: report.종합정산.변동비, note: "일회성 수입 · 지출" },
   ];
 
   // 목적지를 모르는 이체. 0 이면 줄을 만들지 않고, 값이 있으면 반드시 보인다 —
@@ -570,10 +647,15 @@ export function ReportView({
         {/* 우: 변동비 · 종합정산 · 메인 계좌 잔액 */}
         <div className="flex flex-col gap-4">
           <KindTable
-            kind="변동비"
-            items={variableItems}
-            total={report.변동지출.total}
-            caption={`${report.yearMonth} 변동비`}
+            kind="카드비"
+            items={cardItems}
+            total={card.total}
+            caption={`${report.yearMonth} 카드비`}
+          />
+          <VariableTable
+            lines={lines.변동비}
+            section={report.변동비}
+            caption={`${report.yearMonth} 변동비(일회성 수입 · 지출)`}
           />
 
           <table className={BOX}>
@@ -703,9 +785,9 @@ export function ReportView({
           </p>
         ) : null}
         <p className="text-xs text-zinc-500">
-          미분류 출금은 위 변동비 표에 ‘미분류’ 꼬리표로, 메인 계좌의 미분류 입금은 수입 표에 나옵니다.
-          ‘기타’로 분류한 거래는 분류된 것으로 세며, 출금은 변동비 표에 ‘기타’ 꼬리표로,
-          입금은 수입 표에 ‘기타’ 꼬리표로 나옵니다.
+          메인 계좌의 미분류 거래는 분류하기 전까지 입금 · 출금 모두 위 변동비 표에 ‘미분류’
+          꼬리표로 나옵니다(입금은 일회성 수입, 출금은 일회성 지출 쪽). 분류하면 제자리로
+          옮겨 갑니다. 예전에 ‘기타’로 분류한 거래는 변동비로 봅니다.
         </p>
       </section>
     </div>
