@@ -16,6 +16,7 @@
 //   - console 호출이 없다. 에러는 바인딩 없는 `catch {}` 로 받는다.
 //   - `range` 는 정해진 값(6 · 12 · 24 · all)만 받고, 그 밖의 값은 되비추지 않고
 //     기본값으로 본다.
+import Form from "next/form";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -80,7 +81,7 @@ function Shell({ children }: { children: React.ReactNode }) {
 
 function RangePicker({ selected }: { selected: string }) {
   return (
-    <form method="get" action="/stats" className="flex items-center gap-2">
+    <Form action="/stats" className="flex items-center gap-2">
       <label htmlFor="range" className="text-sm text-zinc-600 dark:text-zinc-400">
         기간
       </label>
@@ -102,7 +103,7 @@ function RangePicker({ selected }: { selected: string }) {
       >
         보기
       </button>
-    </form>
+    </Form>
   );
 }
 

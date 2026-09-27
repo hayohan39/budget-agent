@@ -17,6 +17,7 @@
 //   - 화면에 나가는 것은 집계뿐이다. 행 단위 내역 · 거래 일시 · 계좌번호는 없다.
 //     단, 항목 줄의 이름은 사람이 정하지 않았으면 **정규화한 적요**다(사용자가
 //     요청한 변경. PLAN.md "적요 표시 원칙 변경"). 미분류는 건수와 /classify 링크.
+import Form from "next/form";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -62,7 +63,7 @@ function MonthPicker({ months, selected }: { months: string[]; selected: string 
   const options = months.includes(selected) ? months : [selected, ...months];
 
   return (
-    <form method="get" action="/report" className="flex items-center gap-2">
+    <Form action="/report" className="flex items-center gap-2">
       <label htmlFor="month" className="text-sm text-zinc-600 dark:text-zinc-400">
         조회 월
       </label>
@@ -84,7 +85,7 @@ function MonthPicker({ months, selected }: { months: string[]; selected: string 
       >
         보기
       </button>
-    </form>
+    </Form>
   );
 }
 
