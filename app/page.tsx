@@ -30,6 +30,12 @@ export default async function Home() {
         >
           분류 정리
         </Link>
+        <Link
+          href="/stats"
+          className="rounded-md border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
+        >
+          가계부 통계
+        </Link>
       </div>
       <form
         action={async () => {
