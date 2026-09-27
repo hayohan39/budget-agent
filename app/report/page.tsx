@@ -36,12 +36,20 @@ function Shell({ children }: { children: React.ReactNode }) {
     <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 p-8">
       <div className="flex items-baseline justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">월별 현금흐름표</h1>
-        <Link
-          href="/"
-          className="text-sm text-zinc-600 underline underline-offset-4 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-        >
-          홈
-        </Link>
+        <div className="flex gap-4">
+          <Link
+            href="/stats"
+            className="text-sm text-zinc-600 underline underline-offset-4 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+          >
+            통계
+          </Link>
+          <Link
+            href="/"
+            className="text-sm text-zinc-600 underline underline-offset-4 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+          >
+            홈
+          </Link>
+        </div>
       </div>
       {children}
     </main>
