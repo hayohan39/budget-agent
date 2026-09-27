@@ -159,7 +159,7 @@ function AccountBadge({ account }: { account: GroupAccount | null }) {
 }
 
 /**
- * 한 묶음의 입력. 분류는 드롭다운 하나로만 고른다(‘기타’ 도 드롭다운에 있다).
+ * 한 묶음의 입력. 분류는 드롭다운 하나로만 고른다(예전 ‘기타’ 는 ‘변동비’ 로 합쳤다).
  */
 export function GroupForm({
   month,

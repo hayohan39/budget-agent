@@ -59,7 +59,7 @@ function monthRows() {
     row({ amount: '-100000', description: '가상용돈', category: '용돈' }),
     row({ amount: '-870000', description: '가상카드주식회사', category: '카드대금' }),
     row({ amount: '-42000', description: '가상마트' }), // 미분류 출금 -> 변동비
-    row({ amount: '-8000', description: '가상기타', category: '기타' }),
+    row({ amount: '-8000', description: '가상기타', category: '기타' }), // 예전 기타 -> 변동비
   ];
 }
 
@@ -67,7 +67,7 @@ function reportOf(yearMonth, rows) {
   return aggregateMonthly({ yearMonth, accounts: ACCOUNTS, rows });
 }
 
-test('다섯 값은 현금흐름표 집계에서 나오고, 지출은 나간 돈의 크기다', () => {
+test('여섯 값은 현금흐름표 집계에서 나오고, 지출은 나간 돈의 크기다', () => {
   const report = reportOf('2026-08', monthRows());
   const point = trendPointOf(report);
 
@@ -79,12 +79,37 @@ test('다섯 값은 현금흐름표 집계에서 나오고, 지출은 나간 돈
     저축: 500000,
     주거비: 420000,
     고정비: 1055000, // 메인의 고정비 분류 55,000 + 고정비 계좌로 옮긴 1,000,000
-    변동비: 920000, // 카드 870,000 + 미분류 42,000 + 기타 8,000
+    카드비: 870000, // 카드대금만
+    변동비: 50000, // 미분류 42,000 + 예전 기타 8,000
   });
 
   // 단일 출처: 현금흐름표 종합정산의 같은 줄과 같다.
   assert.equal(point.수입, report.종합정산.수입);
-  assert.equal(point.변동비, -report.종합정산.변동지출);
+  assert.equal(point.카드비, -report.종합정산.카드비);
+  assert.equal(point.변동비, -report.종합정산.변동비);
+});
+
+test('일회성 수입(변동비 · 미분류 입금)은 수입이 아니라 변동비를 줄이고, 더 크면 변동비가 음수다', () => {
+  const base = trendPointOf(reportOf('2026-08', monthRows()));
+  const withOneOff = trendPointOf(
+    reportOf('2026-08', [
+      ...monthRows(),
+      row({ amount: '30000', description: '가상중고거래', category: '변동비' }),
+      row({ amount: '5000', description: '가상환급' }), // 미분류 입금
+    ]),
+  );
+  assert.equal(withOneOff.수입, base.수입);
+  assert.equal(withOneOff.카드비, base.카드비);
+  assert.equal(withOneOff.변동비, base.변동비 - 35000);
+
+  const netInflow = trendPointOf(
+    reportOf('2026-08', [
+      row({ amount: '100000', description: '가상중고거래', category: '변동비' }),
+      row({ amount: '-40000', description: '가상마트', category: '변동비' }),
+    ]),
+  );
+  assert.equal(netInflow.변동비, -60000);
+  assert.ok(Object.is(netInflow.수입, 0));
 });
 
 test('내 계좌 간 이체는 수입을 부풀리지 않는다', () => {
@@ -111,15 +136,16 @@ test('지출이 없는 항목은 0 이다(-0 이 아니다) · 메인 계좌의 
       row({ amount: '-10000', category: '변동비' }),
     ]),
   );
-  for (const key of ['저축', '주거비', '고정비']) {
+  for (const key of ['저축', '주거비', '고정비', '카드비']) {
     assert.ok(Object.is(point[key], 0), key);
   }
   assert.equal(point.변동비, 10000);
 
-  // 현금흐름표는 메인 계좌의 입금을 분류와 무관하게 수입 섹션에 둔다(placeMainRow).
-  // 통계도 같은 집계를 쓰므로 카드 취소 입금은 변동비를 줄이지 않고 수입에 잡힌다.
+  // 현금흐름표는 메인 계좌의 입금을 (변동비 · 미분류가 아니면) 수입 섹션에 둔다(placeMainRow).
+  // 통계도 같은 집계를 쓰므로 카드대금으로 분류한 취소 입금은 카드비를 줄이지 않고 수입에 잡힌다.
   const refundMonth = trendPointOf(reportOf('2026-08', [row({ amount: '5000', category: '카드대금' })]));
   assert.equal(refundMonth.수입, 5000);
+  assert.ok(Object.is(refundMonth.카드비, 0));
   assert.ok(Object.is(refundMonth.변동비, 0));
 });
 
