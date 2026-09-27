@@ -67,6 +67,7 @@ test('올바른 요청은 정규화된 키 · 항목으로 통과한다', () => 
       category: '고정비',
       item: '정수기 렌탈',
       stripMonth: false,
+      pattern: null,
     },
   });
 });
