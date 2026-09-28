@@ -66,6 +66,18 @@ const FLOW = new Intl.NumberFormat("ko-KR", { signDisplay: "exceptZero" });
 /** 항목 이름 상한(lib/classify/item.mjs 의 ITEM_MAX_LENGTH). 넘는 메모는 항목 기본값으로 쓰지 않는다. */
 const ITEM_LIMIT = 40;
 
+/** 전체 기간 보기에서 묶음이 속한 달. */
+function MonthBadge({ month }: { month: string }) {
+  return (
+    <span
+      data-testid="group-month"
+      className="mr-2 inline-block rounded bg-zinc-800 px-1.5 py-0.5 align-middle text-xs font-normal text-white tabular-nums dark:bg-zinc-200 dark:text-zinc-900"
+    >
+      {month}
+    </span>
+  );
+}
+
 /** 묶음 이름 아래의 메모 — 작은 회색 글씨(report 의 항목 줄과 같은 모양). */
 function GroupMemo({ memo }: { memo: string | null }) {
   if (memo === null) return null;
@@ -212,11 +224,14 @@ export function GroupForm({
   group,
   categories,
   hideOnApply = false,
+  showMonth = false,
 }: {
   month: string;
   group: ClassifyGroup;
   categories: string[];
   hideOnApply?: boolean;
+  /** 전체 기간 보기: 묶음이 속한 달을 이름 앞에 붙인다(이번만이 그 달에만 적용된다). */
+  showMonth?: boolean;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -302,6 +317,7 @@ export function GroupForm({
         className="flex flex-wrap items-baseline justify-between gap-2 rounded-md border border-dashed border-zinc-300 px-3 py-2 text-xs text-zinc-500 dark:border-zinc-700"
       >
         <span className="break-all">
+          {showMonth ? <MonthBadge month={month} /> : null}
           <AccountBadge account={group.account} />
           <DirectionBadge direction={group.direction} />
           {group.key}
@@ -322,6 +338,7 @@ export function GroupForm({
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="font-medium break-all">
+          {showMonth ? <MonthBadge month={month} /> : null}
           <AccountBadge account={group.account} />
           <DirectionBadge direction={group.direction} />
           {group.key}
@@ -386,7 +403,7 @@ export function GroupForm({
               checked={scope === "once"}
               onChange={() => setScope("once")}
             />
-            이번만
+            {showMonth ? `이번만(${month})` : "이번만"}
           </label>
           <label className="flex items-center gap-1">
             <input
