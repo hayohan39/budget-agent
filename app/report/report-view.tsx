@@ -146,7 +146,7 @@ function plain(value: number | null | undefined): string {
 const VERIFY_REASON_TEXT: Record<string, string> = {
   noMainAccount: "메인 계좌가 등록되어 있지 않습니다",
   noRows: "이 달에 메인 계좌 거래가 없습니다",
-  balanceMissing: "첫 거래 또는 마지막 거래의 거래 후 잔액이 비어 있습니다",
+  balanceMissing: "이 달 메인 계좌 거래의 거래 후 잔액이 모두 비어 있습니다",
   unavailable: "검산에 필요한 값이 없습니다",
 };
 
@@ -158,8 +158,23 @@ const VERIFY_REASON_TEXT: Record<string, string> = {
  */
 const BALANCE_REASON_TEXT: Record<string, string> = {
   noRows: "이 달 거래가 없습니다",
-  balanceMissing: "첫 거래 또는 마지막 거래의 거래 후 잔액이 비어 있습니다",
+  balanceMissing: "이 달 거래의 거래 후 잔액이 모두 비어 있습니다",
 };
+
+/**
+ * 경계 거래의 잔액 칸이 비어 가까운 잔액에서 금액으로 이어 계산(역산)했을 때 붙이는 말
+ * (lib/report/monthly.mjs 의 balanceSpan). 토스 명세서는 잔액 0원이던 계좌에 들어온
+ * 입금의 잔액 칸을 비워 둔다 — 0원에서 시작한 계좌의 첫 달이 이렇다.
+ */
+function inferredBalanceNote(
+  entry: { inferredOpening?: boolean; inferredClosing?: boolean } | undefined,
+): string | undefined {
+  if (entry === undefined) return undefined;
+  if (entry.inferredOpening && entry.inferredClosing) return "첫 · 마지막 거래 잔액 역산";
+  if (entry.inferredOpening) return "첫 거래 잔액 역산";
+  if (entry.inferredClosing) return "마지막 거래 잔액 역산";
+  return undefined;
+}
 
 function reasonText(table: Record<string, string>, reason: string | null): string {
   if (reason === null) return "사유를 알 수 없습니다";
@@ -488,13 +503,14 @@ function AccountTable({
           tone={tone}
           // '계좌 · 금고 제외' 는 잔액 숫자를 설명하는 말이라 숫자가 있을 때(derived)만
           // 붙인다. 숫자가 '—' 이면 그 이유를, 잔액 정보가 없으면 아무것도 붙이지 않는다.
+          // 잔액 칸이 빈 경계 거래를 금액으로 이어 계산했으면 그 사실도 함께 밝힌다.
           note={
             balance === undefined
               ? undefined
               : balance.derived
-                ? hasVault
-                  ? "계좌 · 금고 제외"
-                  : undefined
+                ? [hasVault ? "계좌 · 금고 제외" : undefined, inferredBalanceNote(balance)]
+                    .filter((part) => part !== undefined)
+                    .join(" · ") || undefined
                 : `(${balanceReasonText(balance.reason)})`
           }
         />
@@ -563,6 +579,12 @@ export function VerifyBanner({
           실현순증감 {flow(verification.actual)} 이 {account} 계좌 잔액 변화{" "}
           {flow(verification.expected)} 과 일치합니다.
         </p>
+        {verification.inferred ? (
+          <p className="mt-1 text-xs text-zinc-500">
+            거래 후 잔액 칸이 빈 첫 · 마지막 거래는 가까운 잔액에서 거래 금액으로 이어 계산했습니다
+            (그 거래들은 잔액과 대조되지 않습니다).
+          </p>
+        ) : null}
       </section>
     );
   }
@@ -585,6 +607,11 @@ export function VerifyBanner({
         두 값은 서로 다른 컬럼(거래 금액 · 거래 후 잔액)에서 나옵니다. 어긋났다면
         거래가 빠졌거나 파싱이 어긋난 신호입니다. <strong>손으로 값을 맞춰 덮지 마세요.</strong>
       </p>
+      {verification.inferred ? (
+        <p className="mt-1 text-xs text-zinc-500">
+          거래 후 잔액 칸이 빈 첫 · 마지막 거래는 가까운 잔액에서 거래 금액으로 이어 계산했습니다.
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -826,7 +853,11 @@ export function ReportView({
               <tr key={entry.role}>
                 <th scope="row" className={`${CELL} text-left font-normal`}>
                   {entry.nickname}
-                  {entry.derived ? null : (
+                  {entry.derived ? (
+                    inferredBalanceNote(entry) === undefined ? null : (
+                      <span className="ml-2 text-xs text-zinc-500">({inferredBalanceNote(entry)})</span>
+                    )
+                  ) : (
                     <span className="ml-2 text-xs text-zinc-500">
                       ({balanceReasonText(entry.reason)})
                     </span>

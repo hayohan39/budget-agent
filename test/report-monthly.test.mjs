@@ -457,7 +457,15 @@ test('계좌별 잔액 변화를 balance 컬럼에서 끌어낸다', () => {
   const span = balanceSpan(rows);
 
   // 시작 잔액 = 첫 거래의 거래 후 잔액 - 그 거래 금액.
-  assert.deepEqual(span, { opening: 10000, closing: 12500, change: 2500, derived: true, reason: null });
+  assert.deepEqual(span, {
+    opening: 10000,
+    closing: 12500,
+    change: 2500,
+    derived: true,
+    inferredOpening: false,
+    inferredClosing: false,
+    reason: null,
+  });
 
   const main = report(rows).계좌별잔액변화.find((entry) => entry.role === 'main');
   assert.equal(main.change, 2500);
@@ -475,20 +483,97 @@ test('같은 초의 행은 id 내림차순이 시간순이다', () => {
     closing: 7000,
     change: -3000,
     derived: true,
+    inferredOpening: false,
+    inferredClosing: false,
     reason: null,
   });
 });
 
-test('경계 행의 잔액이 비어 있으면 추정하지 않고 사유를 남긴다', () => {
+test('첫 거래의 잔액 칸이 비면 다음 잔액에서 금액으로 거슬러 시작 잔액을 낸다', () => {
   const rows = [
     row({ id: '2', txn_at: '2026-08-01T00:00:00+09:00', amount: '1000', balance: null }),
     row({ id: '1', txn_at: '2026-08-30T00:00:00+09:00', amount: '2000', balance: '12500' }),
+  ];
+  assert.deepEqual(balanceSpan(rows), {
+    opening: 9500,
+    closing: 12500,
+    change: 3000,
+    derived: true,
+    inferredOpening: true,
+    inferredClosing: false,
+    reason: null,
+  });
+});
+
+test('마지막 거래의 잔액 칸이 비면 앞 잔액에서 금액을 이어 끝 잔액을 낸다', () => {
+  const rows = [
+    row({ id: '3', txn_at: '2026-08-01T00:00:00+09:00', amount: '1000', balance: '11000' }),
+    row({ id: '2', txn_at: '2026-08-15T00:00:00+09:00', amount: '-500', balance: null }),
+    row({ id: '1', txn_at: '2026-08-30T00:00:00+09:00', amount: '2000', balance: null }),
+  ];
+  assert.deepEqual(balanceSpan(rows), {
+    opening: 10000,
+    closing: 12500,
+    change: 2500,
+    derived: true,
+    inferredOpening: false,
+    inferredClosing: true,
+    reason: null,
+  });
+});
+
+test('0원에서 시작한 계좌: 첫 입금의 잔액 칸이 비어도 시작 잔액 0 으로 잡힌다', () => {
+  // 토스 명세서는 잔액 0 인 계좌에 들어온 입금의 `거래 후 잔액` 을 비워 둔다(fixture H18).
+  // 새로 연 비상금 계좌의 첫 달이 정확히 이 모양이다.
+  const rows = [
+    row({ id: '3', account_id: 3, txn_at: '2026-07-01T09:00:00+09:00', amount: '500000', balance: null }),
+    row({ id: '2', account_id: 3, txn_at: '2026-07-15T09:00:00+09:00', amount: '300000', balance: '800000' }),
+    row({ id: '1', account_id: 3, txn_at: '2026-07-20T09:00:00+09:00', amount: '-800000', balance: '0' }),
+  ];
+  const span = balanceSpan(rows);
+  assert.equal(span.derived, true);
+  assert.equal(span.opening, 0);
+  // 끝 잔액 0 도 빈 값이 아니다 — 금액으로 건너가지 않는다.
+  assert.equal(span.closing, 0);
+  assert.equal(span.inferredOpening, true);
+  assert.equal(span.inferredClosing, false);
+
+  const emergency = report(rows).계좌별잔액변화.find((entry) => entry.role === 'emergency');
+  assert.equal(emergency.derived, true);
+  assert.equal(emergency.reason, null);
+  assert.equal(emergency.opening, 0);
+});
+
+test('시작 잔액 0 · 끝 잔액 0 은 둘 다 값이다(숫자 0 · 문자열 0 모두)', () => {
+  for (const zero of [0, '0']) {
+    const rows = [
+      row({ id: '2', txn_at: '2026-08-01T00:00:00+09:00', amount: '700', balance: typeof zero === 'number' ? 700 : '700' }),
+      row({ id: '1', txn_at: '2026-08-30T00:00:00+09:00', amount: '-700', balance: zero }),
+    ];
+    assert.deepEqual(balanceSpan(rows), {
+      opening: 0,
+      closing: 0,
+      change: 0,
+      derived: true,
+      inferredOpening: false,
+      inferredClosing: false,
+      reason: null,
+    });
+  }
+});
+
+test('그 달 행의 잔액 칸이 전부 비어 있을 때만 balanceMissing 이다', () => {
+  const rows = [
+    row({ id: '2', txn_at: '2026-08-01T00:00:00+09:00', amount: '1000', balance: null }),
+    row({ id: '1', txn_at: '2026-08-30T00:00:00+09:00', amount: '2000', balance: undefined }),
   ];
   assert.deepEqual(balanceSpan(rows), {
     opening: null,
     closing: null,
     change: null,
     derived: false,
+    inferredOpening: false,
+    inferredClosing: false,
     reason: 'balanceMissing',
   });
 });
@@ -526,7 +611,16 @@ test('결과에 거래 일시·잔액이 들어가지 않고, 적요 · 메모�
       memo: '비밀메모',
       txn_at: '2026-08-10T12:34:56+09:00',
     }),
-    row({ id: '2', amount: '-170000', description: '이영희', txn_type: '모임원송금' }),
+    // 두 번째 거래가 그 달의 마지막이다. 끝 잔액은 정의상 마지막 행의 잔액이라
+    // 결과에 나오는 것이 맞고(계좌별 잔액 표), 그 앞 행의 잔액(9876543)은 나오지 않는다.
+    row({
+      id: '2',
+      amount: '-170000',
+      balance: '9706543',
+      description: '이영희',
+      txn_type: '모임원송금',
+      txn_at: '2026-08-20T00:00:00+09:00',
+    }),
   ]);
   const serialized = JSON.stringify(result);
 
