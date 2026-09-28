@@ -331,7 +331,7 @@ test('미분류 입금은 수입이 아니라 변동비의 일회성 수입에 �
   assert.equal(result.수입.total, 0);
   assert.deepEqual(result.변동비.일회성수입, { total: 3500000, count: 1 });
   assert.deepEqual(result.항목별.변동비, [
-    { category: '미분류', item: '김철수', direction: 'in', total: 3500000, count: 1 },
+    { category: '미분류', item: '김철수', direction: 'in', total: 3500000, count: 1, memos: [], memoCount: 0 },
   ]);
   assert.equal(result.미분류.count, 1);
 });
@@ -513,9 +513,9 @@ test('잔액 0 은 빈 값이 아니다', () => {
 
 // ── 로그 위생 ──────────────────────────────────────────────────────────────
 
-test('결과에 메모·거래 일시·잔액이 들어가지 않고, 적요는 항목 이름 자리에만 나온다', () => {
-  // 적요는 이제 항목 이름으로 화면에 나온다(PLAN.md "적요 표시 원칙 변경").
-  // 그 밖의 행 단위 값은 여전히 결과에 실리지 않는다.
+test('결과에 거래 일시·잔액이 들어가지 않고, 적요 · 메모는 항목 줄에만 나온다', () => {
+  // 적요는 항목 이름으로(PLAN.md "적요 표시 원칙 변경"), 메모는 항목 줄의 memos 로(2026-09
+  // 사용자 요청) 화면에 나온다. 그 밖의 행 단위 값은 여전히 결과에 실리지 않는다.
   const result = report([
     row({
       id: '1',
@@ -530,7 +530,7 @@ test('결과에 메모·거래 일시·잔액이 들어가지 않고, 적요는 
   ]);
   const serialized = JSON.stringify(result);
 
-  for (const leak of ['비밀메모', '2026-08-10T12:34:56', '12:34:56', '9876543', '모임원송금']) {
+  for (const leak of ['2026-08-10T12:34:56', '12:34:56', '9876543', '모임원송금']) {
     assert.ok(!serialized.includes(leak), `${leak} 이(가) 새어 나왔다`);
   }
 
@@ -544,12 +544,16 @@ test('결과에 메모·거래 일시·잔액이 들어가지 않고, 적요는 
       return copy;
     }),
   });
-  for (const description of ['김철수', '이영희']) {
-    assert.ok(!withoutLines.includes(description), `${description} 이(가) 항목 줄 밖에 나왔다`);
+  for (const text of ['김철수', '이영희', '비밀메모']) {
+    assert.ok(!withoutLines.includes(text), `${text} 이(가) 항목 줄 밖에 나왔다`);
   }
   assert.deepEqual(
     항목별.변동비.map((line) => line.item),
     ['김철수', '이영희'],
+  );
+  assert.deepEqual(
+    항목별.변동비.map((line) => line.memos),
+    [['비밀메모'], []],
   );
 });
 

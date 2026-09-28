@@ -199,7 +199,15 @@ test('저장된 항목이 적요를 이긴다 — 다른 적요도 같은 항목
   assertLinesAddUp(result);
 
   const isa = result.항목별.고정지출1.find((line) => line.item === 'ISA');
-  assert.deepEqual(isa, { category: '저축', item: 'ISA', direction: 'out', total: -2000000, count: 2 });
+  assert.deepEqual(isa, {
+    category: '저축',
+    item: 'ISA',
+    direction: 'out',
+    total: -2000000,
+    count: 2,
+    memos: [],
+    memoCount: 0,
+  });
   // 카드대금에 항목을 정하면 카드사 묶음도 그 이름으로 간다.
   assert.ok(result.카드비.issuers.some((issuer) => issuer.issuer === '생활비카드'));
   assert.equal(result.종합정산.실현순증감, -441865);

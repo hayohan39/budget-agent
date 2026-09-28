@@ -62,6 +62,7 @@ function recordingClient({ rules = [], failLookup = false } = {}) {
       statements.push(text);
       if (text.includes('FROM category_rules')) return { rows: rules.map((rule) => ({ ...rule })) };
       if (text.includes('FROM merchant_map')) return { rows: [] };
+      if (text.includes('FROM memo_map')) return { rows: [] };
       if (text === EXISTING_KEYS_QUERY) {
         if (failLookup) {
           const error = new Error(`무언가 ${values[0][0]}`);

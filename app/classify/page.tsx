@@ -10,8 +10,9 @@
 //   - 항상 동적으로 렌더한다(`force-dynamic`). 정적으로 구워 두지 않는다.
 //     동적 페이지의 응답은 Next 가 `Cache-Control: private, no-cache, no-store`
 //     로 내보낸다.
-//   - 행 단위가 아니라 **(계좌, 적요, 방향)별 묶음**만 보여 준다(건수 · 합계).
-//     거래 일시 · 잔액 · 메모 · 계좌번호는 없다. 계좌는 별칭(메인 · 고정비 ·
+//   - 행 단위가 아니라 **(계좌, 적요, 메모, 방향)별 묶음**만 보여 준다(건수 · 합계).
+//     메모는 사용자가 거래마다 적은 글이라 적요와 똑같이 다룬다(2026-09 사용자 요청으로
+//     화면에 보인다). 거래 일시 · 잔액 · 계좌번호는 없다. 계좌는 별칭(메인 · 고정비 ·
 //     비상금)으로만 보인다 — 뒤 4자리는 읽지도 않는다.
 //   - console 호출이 없다. 에러는 바인딩 없는 `catch {}` 로 받는다.
 //   - `month` 는 SQL 에 닿기 전에 `^[0-9]{4}-[0-9]{2}$` 로 거르고, 틀리면 받은
@@ -24,11 +25,27 @@ import { auth, isAllowedEmail } from "@/auth";
 import { withClient } from "@/lib/db/client.mjs";
 import { isYearMonth, listYearMonths } from "@/lib/report/months.mjs";
 import { CLASSIFY_CATEGORIES } from "@/lib/report/monthly.mjs";
-import { CLASSIFY_FILTERS, listClassifyGroups, listMappings, listPatterns } from "@/lib/classify/manual.mjs";
+import {
+  CLASSIFY_FILTERS,
+  listClassifyGroups,
+  listMappings,
+  listMemoMappings,
+  listPatterns,
+} from "@/lib/classify/manual.mjs";
 import { ITEM_MAX_LENGTH } from "@/lib/classify/item.mjs";
 
 import { accountLabel } from "./account-label";
-import { GroupForm, MappingRow, PatternRow, type ClassifyGroup, type Mapping, type SavedPattern } from "./forms";
+import {
+  GroupForm,
+  MappingRow,
+  MemoMappingRow,
+  PatternRow,
+  ReclassifyButton,
+  type ClassifyGroup,
+  type Mapping,
+  type MemoMapping,
+  type SavedPattern,
+} from "./forms";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -128,6 +145,7 @@ type Loaded = {
   month: string | null;
   groups: ClassifyGroup[];
   mappings: Mapping[];
+  memoMappings: MemoMapping[];
   patterns: SavedPattern[];
 };
 
@@ -170,7 +188,8 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
       const groups = month === null ? [] : await listClassifyGroups(client, month, filter);
       const mappings = await listMappings(client);
       const patterns = (await listPatterns(client)) as SavedPattern[];
-      return { months, month, groups, mappings, patterns };
+      const memoMappings = (await listMemoMappings(client)) as MemoMapping[];
+      return { months, month, groups, mappings, memoMappings, patterns };
     });
   } catch {
     return (
@@ -206,8 +225,12 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
             현금흐름표 변동비 표의 일회성 수입, 출금이면 일회성 지출로 들어가고 미분류에서
             빠집니다). 예전의 ‘기타’는 변동비로 합쳤습니다. 메인 계좌에서 고정비 · 비상금 계좌로 옮긴 돈이 받는 쪽
             계좌에 찍힌 입금은 메인 쪽 이체와 금액 · 시각이 맞으면 자동으로 알아보고
-            미분류로 세지 않습니다.
+            미분류로 세지 않습니다. <strong>메모</strong>가 다른 거래는 적요가 같아도 따로
+            묶고(메모는 적요 아래 회색 글씨), 메모가 있는 묶음은 ‘앞으로도’를 <strong>이 메모
+            기준</strong>으로 저장할 수 있습니다. 규칙은 적요에 안 맞으면 메모도 봅니다(예: 메모에
+            ‘IRP’ → 저축, 이때 항목은 메모).
           </p>
+          <ReclassifyButton />
           {loaded.groups.length === 0 ? (
             <p className="text-sm text-zinc-600 dark:text-zinc-400">
               {filter === CLASSIFY_FILTERS.unclassified
@@ -228,7 +251,7 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
                   </h2>
                   <ul className="flex flex-col gap-3">
                     {section.groups.map((group) => (
-                      <li key={`${section.id}\u001f${group.direction}\u001f${group.key}`}>
+                      <li key={`${section.id}\u001f${group.direction}\u001f${group.key}\u001f${group.memo ?? ""}`}>
                         <GroupForm
                           month={loaded.month as string}
                           group={group}
@@ -263,6 +286,25 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
             {loaded.patterns.map((saved) => (
               <li key={`${saved.direction}\u001f${saved.pattern}`}>
                 <PatternRow saved={saved} categories={categories} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">저장된 메모 매핑</h2>
+        <p className="text-xs text-zinc-500">
+          ‘앞으로도’를 <strong>이 메모 기준</strong>으로 저장한 것들입니다. 메모가 같고 방향이 같은 거래라면 적요 · 계좌와
+          무관하게 걸리고, 적요 기준 매핑 · 패턴 · 규칙보다 먼저 봅니다. 지우면 이 매핑으로 분류된 거래가 다시 분류됩니다.
+        </p>
+        {loaded.memoMappings.length === 0 ? (
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">저장된 메모 매핑이 없습니다.</p>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {loaded.memoMappings.map((mapping) => (
+              <li key={`${mapping.direction}\u001f${mapping.memo}`}>
+                <MemoMappingRow mapping={mapping} categories={categories} />
               </li>
             ))}
           </ul>

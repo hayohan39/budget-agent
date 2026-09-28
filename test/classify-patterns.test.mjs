@@ -226,7 +226,7 @@ function recordingClient(description) {
     queries,
     async query(text, values = []) {
       queries.push({ text, values });
-      if (text.startsWith('SELECT t.id, t.description, t.amount')) {
+      if (text.startsWith('SELECT t.id, t.description, t.memo, t.amount')) {
         return { rows: [{ id: '7', description, amount: '-52000' }], rowCount: 1 };
       }
       if (text.includes('LIKE $1')) return { rows: [], rowCount: 0 };

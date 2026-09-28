@@ -63,6 +63,8 @@ test('올바른 요청은 정규화된 키 · 항목으로 통과한다', () => 
       month: '2026-08',
       account: 'main',
       key: '코웨이08월렌탈',
+      memo: null,
+      basis: 'description',
       direction: 'out',
       category: '고정비',
       item: '정수기 렌탈',
@@ -349,7 +351,7 @@ test('이번만: 그 달 그 묶음만 manual 로 바꾸고 매핑은 만들지 
     const report = await buildMonthlyReport(client, '2026-08');
     assert.deepEqual(
       report.항목별.고정지출2.find((line) => line.item === '정수기'),
-      { category: '고정비', item: '정수기', direction: 'out', total: -3780, count: 1 },
+      { category: '고정비', item: '정수기', direction: 'out', total: -3780, count: 1, memos: [], memoCount: 0 },
     );
     assert.equal(report.미분류.count, 7);
     assert.equal(verifyMonthlyReport(report).ok, true);
@@ -472,12 +474,12 @@ test('체크박스 켠 앞으로도: 월 토큰을 지운 키로 매핑을 저�
     const augReport = await buildMonthlyReport(client, '2026-08');
     assert.deepEqual(
       augReport.항목별.고정지출2.find((line) => line.item === '정수기'),
-      { category: '고정비', item: '정수기', direction: 'out', total: -3780, count: 1 },
+      { category: '고정비', item: '정수기', direction: 'out', total: -3780, count: 1, memos: [], memoCount: 0 },
     );
     const sepReport = await buildMonthlyReport(client, '2026-09');
     assert.deepEqual(
       sepReport.항목별.고정지출2.find((line) => line.item === '정수기'),
-      { category: '고정비', item: '정수기', direction: 'out', total: -3780, count: 1 },
+      { category: '고정비', item: '정수기', direction: 'out', total: -3780, count: 1, memos: [], memoCount: 0 },
     );
     assert.equal(verifyMonthlyReport(augReport).ok, true);
     // 9월 행은 이 테스트가 잔액 없이 끼워 넣은 것이라 검산은 스킵된다(잔액 결손).
@@ -622,16 +624,19 @@ async function mapRows(client) {
   return result.rows.map((row) => [row.description, row.direction, row.category, row.item]);
 }
 
-test('fixture: 입금 · 출금이 섞인 적요(김철수)는 /classify 에서 두 묶음이다', async (t) => {
+test('fixture: 입금 · 출금 · 메모가 섞인 적요(김철수)는 /classify 에서 방향 · 메모별 묶음이다', async (t) => {
   await withScratchDatabase(t, 'classify_directions', async (client) => {
     await importFixture(client);
     const groups = await listClassifyGroups(client, '2026-08', CLASSIFY_FILTERS.unclassified);
     const kim = groups.filter((group) => group.key === '김철수');
+    // 입금 3건 중 2건은 메모(곰돌이 월급 · 곰돌이 휴가비)가 달라 따로 묶인다(2026-09).
     assert.deepEqual(
-      kim.map((group) => [group.direction, group.count, group.total]),
+      kim.map((group) => [group.direction, group.memo, group.count, group.total]),
       [
-        ['in', 3, 4534000],
-        ['out', 1, -170000],
+        ['in', '곰돌이 월급', 1, 3500000],
+        ['in', '곰돌이 휴가비', 1, 1000000],
+        ['out', '경주 숙박비', 1, -170000],
+        ['in', null, 1, 34000],
       ],
     );
   });
@@ -646,9 +651,10 @@ test('앞으로도(출금): 방향 매핑을 저장하고 같은 적요의 입�
       extraRecord(3, { description: '김철수', category: '변동비', category_source: 'manual' }), // 9월 출금 manual
     ]);
 
+    // 8월 출금 묶음은 메모가 `경주 숙박비` 인 묶음이다. 적요 기준 매핑이라 9월의 메모 없는 출금도 따라간다.
     const outcome = await applyClassification(
       client,
-      valid({ scope: 'always', key: '김철수', direction: 'out', category: '용돈', item: '철수 용돈' }),
+      valid({ scope: 'always', key: '김철수', memo: '경주 숙박비', direction: 'out', category: '용돈', item: '철수 용돈' }),
     );
     assert.deepEqual(outcome, { ok: true, updated: 2, mapped: true });
     assert.deepEqual(await mapRows(client), [['김철수', 'out', '용돈', '철수 용돈']]);
@@ -663,25 +669,25 @@ test('앞으로도(출금): 방향 매핑을 저장하고 같은 적요의 입�
       ['2026-09', 'out', '변동비', null, 'manual'], // manual — 그대로
     ]);
 
-    // 입금 묶음은 여전히 미분류 목록에 있고, 출금 묶음은 빠졌다.
+    // 입금 묶음(메모별 3묶음)은 여전히 미분류 목록에 있고, 출금 묶음은 빠졌다.
     const groups = await listClassifyGroups(client, '2026-08', CLASSIFY_FILTERS.unclassified);
     assert.deepEqual(
       groups.filter((group) => group.key === '김철수').map((group) => group.direction),
-      ['in'],
+      ['in', 'in', 'in'],
     );
 
-    // 이번만(입금): 이 달의 입금 행만 manual 이 된다.
+    // 이번만(입금 · 메모 없는 묶음): 이 달의 그 묶음 행만 manual 이 된다.
     const once = await applyClassification(
       client,
       valid({ scope: 'once', key: '김철수', direction: 'in', category: '수입', item: '철수 월급' }),
     );
-    assert.deepEqual(once, { ok: true, updated: 3, mapped: false });
+    assert.deepEqual(once, { ok: true, updated: 1, mapped: false });
     const august = (await directedRowsOf(client, '김철수')).filter((row) => row[0] === '2026-08');
     assert.deepEqual(august, [
       ['2026-08', 'in', '수입', '철수 월급', 'manual'],
-      ['2026-08', 'in', '수입', '철수 월급', 'manual'],
+      ['2026-08', 'in', null, null, null], // 메모 `곰돌이 월급` — 다른 묶음
       ['2026-08', 'out', '용돈', '철수 용돈', 'map'],
-      ['2026-08', 'in', '수입', '철수 월급', 'manual'],
+      ['2026-08', 'in', null, null, null], // 메모 `곰돌이 휴가비` — 다른 묶음
     ]);
     assert.deepEqual(await mapRows(client), [['김철수', 'out', '용돈', '철수 용돈']]);
 
@@ -725,7 +731,7 @@ test('방향 구분 전의 any 매핑은 양쪽에 그대로 걸리고, 방향 �
     // 출금에만 방향 매핑을 만든다.
     await applyClassification(
       client,
-      valid({ scope: 'always', key: '김철수', direction: 'out', category: '용돈', item: '철수 용돈' }),
+      valid({ scope: 'always', key: '김철수', memo: '경주 숙박비', direction: 'out', category: '용돈', item: '철수 용돈' }),
     );
     assert.deepEqual(await mapRows(client), [
       ['김철수', 'any', '변동비', '옛 매핑'],
@@ -761,7 +767,7 @@ test('방향 구분 전의 any 매핑은 양쪽에 그대로 걸리고, 방향 �
     // 걸리는 규칙이 없어 미분류), 출금 행은 방향 매핑 그대로다.
     await applyClassification(
       client,
-      valid({ scope: 'always', key: '김철수', direction: 'out', category: '용돈', item: '철수 용돈' }),
+      valid({ scope: 'always', key: '김철수', memo: '경주 숙박비', direction: 'out', category: '용돈', item: '철수 용돈' }),
     );
     const dropAny = await deleteMapping(client, { key: '김철수', direction: 'any' });
     assert.deepEqual(dropAny, { ok: true, reclassified: 0, unclassified: 4 });
@@ -886,7 +892,7 @@ test('동시 쓰기: any 수정 도중 끼어든 같은 키의 방향 매핑이 
     // T1 과 줄 서지 않는다 — 키 단위 잠금이 있으면 여기서 기다린다.
     const always = applyClassification(
       second,
-      valid({ scope: 'always', key: '김철수', direction: 'out', category: '변동비', item: null }),
+      valid({ scope: 'always', key: '김철수', memo: '경주 숙박비', direction: 'out', category: '변동비', item: null }),
     );
     await settledOrWaitingOnLock(client, secondPid, always);
 
@@ -1034,12 +1040,14 @@ test('분류 변동비: 입금 · 출금 모두 고를 수 있고, 현금흐름�
     assert.deepEqual(await mapRows(client), [['이영희', 'out', '변동비', null]]);
     assert.equal(await countUnclassified(client, '2026-08'), 7);
 
-    // 입금 묶음(김철수 입금 3건) — 이번만. 출금 1건은 미분류로 남는다.
-    const once = await applyClassification(
-      client,
-      valid({ scope: 'once', key: '김철수', direction: 'in', category: '변동비', item: null }),
-    );
-    assert.deepEqual(once, { ok: true, updated: 3, mapped: false });
+    // 입금 묶음(김철수 입금 3건 — 메모별 3묶음) — 이번만. 출금 1건은 미분류로 남는다.
+    for (const memo of [null, '곰돌이 월급', '곰돌이 휴가비']) {
+      const once = await applyClassification(
+        client,
+        valid({ scope: 'once', key: '김철수', memo, direction: 'in', category: '변동비', item: null }),
+      );
+      assert.deepEqual(once, { ok: true, updated: 1, mapped: false });
+    }
     assert.equal(await countUnclassified(client, '2026-08'), 4);
 
     const report = await buildMonthlyReport(client, '2026-08');
@@ -1047,15 +1055,24 @@ test('분류 변동비: 입금 · 출금 모두 고를 수 있고, 현금흐름�
     assert.deepEqual(
       report.항목별.변동비.filter((line) => line.category === '변동비'),
       [
-        { category: '변동비', item: '김철수', direction: 'in', total: 4534000, count: 3 },
-        { category: '변동비', item: '이영희', direction: 'out', total: -7500, count: 1 },
+        // 메모는 항목 줄 아래 보조 글씨로 나간다(2026-09).
+        {
+          category: '변동비',
+          item: '김철수',
+          direction: 'in',
+          total: 4534000,
+          count: 3,
+          memos: ['곰돌이 월급', '곰돌이 휴가비'],
+          memoCount: 2,
+        },
+        { category: '변동비', item: '이영희', direction: 'out', total: -7500, count: 1, memos: [], memoCount: 0 },
       ],
     );
     // 일회성 수입은 수입 섹션에 없다. 남은 미분류 출금(김철수)은 변동비에 미분류 줄로 있다.
     assert.ok(report.항목별.수입.every((line) => line.item !== '김철수'));
     assert.deepEqual(
       report.항목별.변동비.find((line) => line.category === '미분류' && line.item === '김철수'),
-      { category: '미분류', item: '김철수', direction: 'out', total: -170000, count: 1 },
+      { category: '미분류', item: '김철수', direction: 'out', total: -170000, count: 1, memos: ['경주 숙박비'], memoCount: 1 },
     );
     assert.equal(verifyMonthlyReport(report).ok, true);
   });
@@ -1081,7 +1098,7 @@ test('예전 기타 매핑 · 행은 변동비로 읽히고, 고쳐 저장하면
     const report = await buildMonthlyReport(client, '2026-08');
     assert.deepEqual(
       report.항목별.변동비.find((line) => line.item === '이영희'),
-      { category: '변동비', item: '이영희', direction: 'out', total: -7500, count: 1 },
+      { category: '변동비', item: '이영희', direction: 'out', total: -7500, count: 1, memos: [], memoCount: 0 },
     );
 
     // 화면에서 그대로 저장하면(드롭다운이 변동비를 미리 고른다) 저장된 값도 변동비가 된다.
