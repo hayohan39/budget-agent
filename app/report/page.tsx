@@ -17,6 +17,10 @@
 //   - 화면에 나가는 것은 집계뿐이다. 행 단위 내역 · 거래 일시 · 계좌번호는 없다.
 //     단, 항목 줄의 이름은 사람이 정하지 않았으면 **정규화한 적요**다(사용자가
 //     요청한 변경. PLAN.md "적요 표시 원칙 변경"). 미분류는 건수와 /classify 링크.
+//   - **예외: 무효 처리(상쇄) 패널(2026-09).** 두 거래를 짝지으려면 사람이 그 거래를 알아봐야
+//     해서, 무효로 표시한 쌍과 후보 쌍(같은 계좌 · 같은 금액 · 반대 방향, 많아야 20쌍)에 한해
+//     거래 일시(분 단위) · 적요 · 메모 · 금액을 보인다. 계좌번호 · 잔액은 없다. 사용자가 요청한
+//     기능이고 이 화면(로그인 + 화이트리스트, 동적 렌더)에만 그린다(app/report/void-panel.tsx).
 import Form from "next/form";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -26,8 +30,10 @@ import { withClient } from "@/lib/db/client.mjs";
 import { isYearMonth, listYearMonths } from "@/lib/report/months.mjs";
 import { buildMonthlyReport } from "@/lib/report/monthly.mjs";
 import { verifyMonthlyReport } from "@/lib/report/verify.mjs";
+import { listVoidCandidates, listVoidedPairs } from "@/lib/report/voids.mjs";
 
 import { ReportView, type MonthlyReport, type Verification } from "./report-view";
+import { VoidPanel, type VoidCandidate, type VoidedPair } from "./void-panel";
 
 // pg 는 Edge 에서 돌지 않는다.
 export const runtime = "nodejs";
@@ -94,6 +100,8 @@ type Loaded = {
   yearMonth: string;
   report: MonthlyReport;
   verification: Verification;
+  voided: VoidedPair[];
+  candidates: VoidCandidate[];
 };
 
 export default async function ReportPage({ searchParams }: PageProps<"/report">) {
@@ -142,9 +150,11 @@ export default async function ReportPage({ searchParams }: PageProps<"/report">)
 
       const yearMonth = requested === "" ? available[0] : requested;
       const report = await buildMonthlyReport(client, yearMonth);
+      const voided = (await listVoidedPairs(client, yearMonth)) as VoidedPair[];
+      const candidates = (await listVoidCandidates(client, yearMonth)) as VoidCandidate[];
       return {
         months: available,
-        loaded: { months: available, yearMonth, report, verification: verifyMonthlyReport(report) },
+        loaded: { months: available, yearMonth, report, verification: verifyMonthlyReport(report), voided, candidates },
       };
     });
     months = outcome.months;
@@ -186,6 +196,9 @@ export default async function ReportPage({ searchParams }: PageProps<"/report">)
       ) : (
         <ReportView report={loaded.report} verification={loaded.verification} />
       )}
+      {loaded.report.거래건수 > 0 || loaded.voided.length > 0 ? (
+        <VoidPanel yearMonth={loaded.yearMonth} voided={loaded.voided} candidates={loaded.candidates} />
+      ) : null}
     </Shell>
   );
 }
