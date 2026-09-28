@@ -224,6 +224,14 @@ test('항목 줄: 서로 다른 메모를 자주 나온 순으로 최대 LINE_ME
   const [line] = report.항목별.변동비;
   assert.equal(LINE_MEMO_LIMIT, 3);
   assert.deepEqual([line.item, line.count, line.memos, line.memoCount], ['경조사', 9, ['집들이', '결혼식', '돌잔치'], 4]);
+
+  // 항목 이름과 같은 메모는 목록에서도 개수에서도 빠진다(메모로 분류된 줄).
+  const named = aggregateMonthly({
+    yearMonth: '2026-07',
+    accounts: ACCOUNTS,
+    rows: ['집들이', '집들이', '결혼식', '돌잔치', '장례식', '생일'].map((memo, i) => ({ ...row(i + 1, memo), item: '집들이' })),
+  }).항목별.변동비[0];
+  assert.deepEqual([named.memos, named.memoCount], [['결혼식', '돌잔치', '생일'], 4]);
 });
 
 // ── 실제 DB ───────────────────────────────────────────────────────────────
