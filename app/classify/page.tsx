@@ -24,11 +24,11 @@ import { auth, isAllowedEmail } from "@/auth";
 import { withClient } from "@/lib/db/client.mjs";
 import { isYearMonth, listYearMonths } from "@/lib/report/months.mjs";
 import { CLASSIFY_CATEGORIES } from "@/lib/report/monthly.mjs";
-import { CLASSIFY_FILTERS, listClassifyGroups, listMappings } from "@/lib/classify/manual.mjs";
+import { CLASSIFY_FILTERS, listClassifyGroups, listMappings, listPatterns } from "@/lib/classify/manual.mjs";
 import { ITEM_MAX_LENGTH } from "@/lib/classify/item.mjs";
 
 import { accountLabel } from "./account-label";
-import { GroupForm, MappingRow, type ClassifyGroup, type Mapping } from "./forms";
+import { GroupForm, MappingRow, PatternRow, type ClassifyGroup, type Mapping, type SavedPattern } from "./forms";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -128,6 +128,7 @@ type Loaded = {
   month: string | null;
   groups: ClassifyGroup[];
   mappings: Mapping[];
+  patterns: SavedPattern[];
 };
 
 export default async function ClassifyPage({ searchParams }: PageProps<"/classify">) {
@@ -168,7 +169,8 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
       const month = requested === "" ? (months[0] ?? null) : requested;
       const groups = month === null ? [] : await listClassifyGroups(client, month, filter);
       const mappings = await listMappings(client);
-      return { months, month, groups, mappings };
+      const patterns = (await listPatterns(client)) as SavedPattern[];
+      return { months, month, groups, mappings, patterns };
     });
   } catch {
     return (
@@ -245,6 +247,27 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
           </Link>
         </>
       )}
+
+      <section className="flex flex-col gap-2">
+        <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">저장된 패턴</h2>
+        <p className="text-xs text-zinc-500">
+          ‘앞으로도’에서 ‘패턴으로 저장’을 고른 것들입니다. <code>#</code> 는 숫자 한 자리, <code>*</code> 는 아무
+          글자입니다. 정확한 적요로 저장한 매핑이 패턴보다 먼저 걸리고, 여러 패턴이 맞으면 # · * 가 아닌 글자가
+          많은 패턴이, 같으면 먼저 만든 패턴이 이깁니다. 지우면 이 패턴으로 분류된 거래가 다시 분류됩니다(‘이번만’으로
+          고른 거래는 그대로).
+        </p>
+        {loaded.patterns.length === 0 ? (
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">저장된 패턴이 없습니다.</p>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {loaded.patterns.map((saved) => (
+              <li key={`${saved.direction}\u001f${saved.pattern}`}>
+                <PatternRow saved={saved} categories={categories} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">저장된 매핑</h2>

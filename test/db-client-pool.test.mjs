@@ -144,7 +144,13 @@ test('풀: pg_advisory_xact_lock 은 풀을 거쳐도 줄 세우고 COMMIT 에�
     assert.deepEqual(order, ['first-locked', 'first-commit', 'second-locked']);
 
     // 트랜잭션 잠금이라 COMMIT 뒤에는 아무도 쥐고 있지 않다(풀에 남은 연결도).
-    const held = await observer.query(`SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory'`);
+    // pg_locks 는 클러스터 전체라, 같은 스크래치 서버에서 동시에 도는 다른 테스트 파일의
+    // 잠금이 섞이지 않게 이 DB 로 좁힌다.
+    const held = await observer.query(
+      `SELECT count(*)::int AS n FROM pg_locks
+        WHERE locktype = 'advisory'
+          AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
+    );
     assert.equal(held.rows[0].n, 0);
   });
 });

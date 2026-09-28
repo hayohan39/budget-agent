@@ -7,7 +7,9 @@
 //
 // console 호출이 이 파일에 없다. 실패하면 서버가 준 고정 문장만 보여 준다.
 import { useRouter } from "next/navigation";
-import { useId, useState, useTransition, type FormEvent } from "react";
+import { useEffect, useId, useState, useTransition, type FormEvent } from "react";
+
+import { compileWildcard, parseWildcardPattern, suggestPattern, wildcardMatches } from "@/lib/classify/wildcard.mjs";
 
 import { accountLabel, type GroupAccount } from "./account-label";
 
@@ -31,6 +33,14 @@ export type ClassifyGroup = {
   item: string | null;
   mixedItem: boolean;
   source: string | null;
+};
+
+export type SavedPattern = {
+  pattern: string;
+  direction: MappingDirection;
+  category: string;
+  item: string | null;
+  updatedAt: string;
 };
 
 export type Mapping = {
@@ -194,7 +204,9 @@ export function GroupForm({
   );
   const [item, setItem] = useState(!group.mixedItem && group.item !== null ? group.item : group.key);
   const [scope, setScope] = useState<"once" | "always">("once");
-  const [stripMonth, setStripMonth] = useState(false);
+  // 적요 패턴으로 저장(앞으로도에서만). 입력칸은 적요에서 만든 제안으로 미리 채운다.
+  const [usePattern, setUsePattern] = useState(false);
+  const [pattern, setPattern] = useState(() => suggestPattern(group.key));
   const [status, setStatus] = useState<Status>({ kind: "idle" });
 
   // id 에 적요를 넣지 않는다(DOM id 에 한글·공백이 섞이면 label 연결이 깨진다).
@@ -218,7 +230,9 @@ export function GroupForm({
         category: chosen,
         item,
         // '이번만'에서는 뜻이 없다(JSON.stringify 가 undefined 키를 뺀다).
-        stripMonth: scope === "always" ? stripMonth : undefined,
+        // 패턴은 '앞으로도' 에서만 보낸다. 서버가 같은 규칙으로 다시 검사하고, 지금 고른
+        // 적요와 맞는지도 서버가 확인한다.
+        pattern: scope === "always" && usePattern ? pattern : undefined,
       });
       if (!ok) {
         setCollapsed(false);
@@ -352,20 +366,261 @@ export function GroupForm({
         </fieldset>
         {scope === "always" ? (
           <label className="flex items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400">
-            <input
-              type="checkbox"
-              checked={stripMonth}
-              onChange={(event) => setStripMonth(event.target.checked)}
-            />
-            월마다 문구가 바뀌는 항목이에요 (예: OO월렌탈) — 앞으로 자동 적용
+            <input type="checkbox" checked={usePattern} onChange={(event) => setUsePattern(event.target.checked)} />
+            달마다 바뀌는 부분이 있어요 — 패턴으로 저장
           </label>
         ) : null}
         <button type="submit" className={BUTTON} disabled={status.kind === "busy"}>
           {status.kind === "busy" ? "저장 중…" : "적용"}
         </button>
       </div>
+      {scope === "always" && usePattern ? (
+        <PatternEditor
+          id={`pattern-${uid}`}
+          value={pattern}
+          onChange={setPattern}
+          groupKey={group.key}
+          direction={group.direction}
+        />
+      ) : null}
       <StatusLine status={status} />
     </form>
+  );
+}
+
+/** lib/classify/wildcard.mjs 의 거부 코드 -> 화면 문장(서버의 CLASSIFY_ERROR_MESSAGES 와 같은 뜻). */
+const PATTERN_ERROR_TEXT: Record<string, string> = {
+  patternNotString: "패턴 형식이 올바르지 않습니다.",
+  patternControlChars: "패턴에 쓸 수 없는 문자가 들어 있습니다.",
+  patternEmpty: "패턴을 입력해 주세요.",
+  patternTooLong: "패턴은 64자까지 쓸 수 있습니다.",
+  patternTooManyWildcards: "* 는 4개, # 는 16개까지 쓸 수 있습니다.",
+  patternNoWildcard: "바뀌는 자리를 # (숫자 한 자리) 나 * (아무 글자) 로 바꿔 주세요.",
+  patternTooFewLiterals: "# · * 가 아닌 글자가 2개 이상 있어야 합니다.",
+};
+
+type Preview = {
+  in: { count: number; manual: number; distinct: number; samples: string[] };
+  out: { count: number; manual: number; distinct: number; samples: string[] };
+};
+
+/**
+ * 패턴 입력 + 미리보기. 입력이 멈추면(0.35초) 서버에 이미 저장된 거래 중 몇 건에
+ * 맞는지 묻는다(방향별 건수와 자주 나온 적요 몇 개). 검사는 서버가 다시 한다.
+ */
+function PatternEditor({
+  id,
+  value,
+  onChange,
+  groupKey,
+  direction,
+}: {
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+  groupKey: string;
+  direction: Direction;
+}) {
+  const parsed = parseWildcardPattern(value);
+  const localError = !parsed.ok
+    ? (PATTERN_ERROR_TEXT[parsed.code] ?? "패턴 형식이 올바르지 않습니다.")
+    : !wildcardMatches(compileWildcard(parsed.pattern), groupKey)
+      ? "이 패턴이 지금 고른 적요와 맞지 않습니다."
+      : null;
+  const [preview, setPreview] = useState<{ pattern: string; data: Preview | null; failed: boolean } | null>(null);
+
+  // 검사를 통과한 패턴만 서버에 묻는다(통과하지 못하면 null).
+  const wanted = localError === null && parsed.ok ? parsed.pattern : null;
+
+  useEffect(() => {
+    if (wanted === null) return;
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch("/api/classify/patterns/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pattern: wanted, key: groupKey }),
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const data = (await response.json()) as Record<string, unknown>;
+        if (!response.ok || data.ok !== true) setPreview({ pattern: wanted, data: null, failed: true });
+        else setPreview({ pattern: wanted, data: data as unknown as Preview, failed: false });
+      } catch {
+        if (!controller.signal.aborted) setPreview({ pattern: wanted, data: null, failed: true });
+      }
+    }, 350);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [wanted, groupKey]);
+
+  const current = preview !== null && wanted !== null && preview.pattern === wanted ? preview : null;
+  const other: Direction = direction === "out" ? "in" : "out";
+
+  return (
+    <div className="flex flex-col gap-1 rounded-md bg-zinc-50 p-2 text-xs dark:bg-zinc-900" data-testid="pattern-editor">
+      <div className="flex flex-wrap items-center gap-2">
+        <label htmlFor={id} className="text-zinc-600 dark:text-zinc-400">
+          패턴
+        </label>
+        <input
+          id={id}
+          type="text"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className={`${INPUT} min-w-0 flex-1 font-mono`}
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </div>
+      <p className="text-zinc-500">
+        <code>#</code> 는 숫자 한 자리, <code>*</code> 는 아무 글자 여러 개(없어도 됨)입니다. 나머지는 글자 그대로
+        비교하고, 적요 전체와 맞아야 합니다. 예: 흥국01184 · 흥국02184 → <code>흥국##184</code>
+      </p>
+      {localError !== null ? (
+        <p role="alert" className="text-red-600">
+          {localError}
+        </p>
+      ) : current === null ? (
+        <p className="text-zinc-500">맞는 거래를 세는 중…</p>
+      ) : current.failed || current.data === null ? (
+        <p className="text-zinc-500">미리보기를 불러오지 못했습니다. 저장은 할 수 있습니다.</p>
+      ) : (
+        <div data-testid="pattern-preview" className="text-zinc-600 dark:text-zinc-400">
+          <p>
+            이미 올린 거래 중 이 패턴에 맞는 <strong>{DIRECTION_TEXT[direction]}</strong>{" "}
+            {current.data[direction].count}건(서로 다른 적요 {current.data[direction].distinct}개)
+            {current.data[direction].manual > 0
+              ? ` — 그중 ‘이번만’으로 고른 ${current.data[direction].manual}건은 바꾸지 않습니다`
+              : ""}
+            {current.data[direction].samples.length > 0 ? ` · 예: ${current.data[direction].samples.join(", ")}` : ""}
+          </p>
+          {current.data[other].count > 0 ? (
+            <p className="text-zinc-500">
+              같은 패턴의 {DIRECTION_TEXT[other]} {current.data[other].count}건은 이 저장과 무관합니다(패턴은 이
+              묶음의 방향에만 걸립니다).
+            </p>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function PatternRow({ saved, categories }: { saved: SavedPattern; categories: string[] }) {
+  const router = useRouter();
+  const [editing, setEditing] = useState(false);
+  const [category, setCategory] = useState(categories.includes(saved.category) ? saved.category : "");
+  const [item, setItem] = useState(saved.item ?? "");
+  const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const uid = useId();
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (category === "") {
+      setStatus({ kind: "error", text: "분류를 골라 주세요." });
+      return;
+    }
+    setStatus({ kind: "busy" });
+    try {
+      const { ok, data } = await post("/api/classify/patterns", {
+        action: "update",
+        pattern: saved.pattern,
+        direction: saved.direction,
+        category,
+        item: item === "" ? null : item,
+      });
+      if (!ok) {
+        setStatus({ kind: "error", text: failureText(data) });
+        return;
+      }
+      setStatus({ kind: "done", text: `저장했습니다 · ${String(data.updated ?? 0)}건에 반영.` });
+      setEditing(false);
+      router.refresh();
+    } catch {
+      setStatus({ kind: "error", text: "서버에 연결하지 못했습니다." });
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm("이 패턴을 지울까요? 이 패턴으로 분류된 거래가 다시 분류됩니다(‘이번만’으로 고른 거래는 그대로).")) {
+      return;
+    }
+    setStatus({ kind: "busy" });
+    try {
+      const { ok, data } = await post("/api/classify/patterns", {
+        action: "delete",
+        pattern: saved.pattern,
+        direction: saved.direction,
+      });
+      if (!ok) {
+        setStatus({ kind: "error", text: failureText(data) });
+        return;
+      }
+      setStatus({
+        kind: "done",
+        text: `지웠습니다 · 다시 분류 ${String(data.reclassified ?? 0)}건, 미분류 ${String(data.unclassified ?? 0)}건.`,
+      });
+      router.refresh();
+    } catch {
+      setStatus({ kind: "error", text: "서버에 연결하지 못했습니다." });
+    }
+  }
+
+  return (
+    <div
+      data-testid="pattern-row"
+      className="flex flex-col gap-2 rounded-md border border-zinc-300 p-3 text-sm dark:border-zinc-700"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="font-medium break-all">
+          <DirectionBadge direction={saved.direction} />
+          <code>{saved.pattern}</code>
+        </p>
+        <p className="text-xs text-zinc-500">
+          {saved.category} · {saved.item ?? "(적요 그대로)"} · {saved.updatedAt.slice(0, 10)}
+        </p>
+      </div>
+      {editing ? (
+        <form onSubmit={save} className="flex flex-wrap items-center gap-2">
+          <label htmlFor={`pat-category-${uid}`} className="text-xs text-zinc-600 dark:text-zinc-400">
+            분류
+          </label>
+          <CategorySelect id={`pat-category-${uid}`} value={category} onChange={setCategory} categories={categories} />
+          <label htmlFor={`pat-item-${uid}`} className="text-xs text-zinc-600 dark:text-zinc-400">
+            항목
+          </label>
+          <input
+            id={`pat-item-${uid}`}
+            type="text"
+            value={item}
+            placeholder="비우면 적요 그대로"
+            onChange={(event) => setItem(event.target.value)}
+            className={`${INPUT} min-w-0 flex-1`}
+            autoComplete="off"
+          />
+          <button type="submit" className={BUTTON} disabled={status.kind === "busy"}>
+            저장
+          </button>
+          <button type="button" className={BUTTON} onClick={() => setEditing(false)}>
+            취소
+          </button>
+        </form>
+      ) : (
+        <div className="flex gap-2">
+          <button type="button" className={BUTTON} onClick={() => setEditing(true)}>
+            수정
+          </button>
+          <button type="button" className={BUTTON} onClick={remove} disabled={status.kind === "busy"}>
+            삭제
+          </button>
+        </div>
+      )}
+      <StatusLine status={status} />
+    </div>
   );
 }
 
