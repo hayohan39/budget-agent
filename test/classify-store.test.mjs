@@ -53,6 +53,7 @@ function fakeClient(rows) {
 
       if (text.includes('FROM category_rules')) return { rows: RULES.map((rule) => ({ ...rule })) };
       if (text.includes('FROM merchant_map')) return { rows: [] };
+      if (text.includes('FROM memo_map')) return { rows: [] };
       if (text.includes('FROM description_patterns')) return { rows: [] };
 
       if (text.includes('FROM transactions')) {

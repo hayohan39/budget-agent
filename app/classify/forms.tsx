@@ -20,6 +20,8 @@ export type MappingDirection = Direction | "any";
 export type ClassifyGroup = {
   account: GroupAccount | null;
   key: string;
+  /** 묶음의 메모(정규화). 메모 없는 묶음은 null. */
+  memo: string | null;
   direction: Direction;
   count: number;
   total: number;
@@ -43,6 +45,14 @@ export type SavedPattern = {
   updatedAt: string;
 };
 
+export type MemoMapping = {
+  memo: string;
+  direction: Direction;
+  category: string;
+  item: string | null;
+  updatedAt: string;
+};
+
 export type Mapping = {
   key: string;
   direction: MappingDirection;
@@ -52,6 +62,31 @@ export type Mapping = {
 };
 
 const FLOW = new Intl.NumberFormat("ko-KR", { signDisplay: "exceptZero" });
+
+/** 항목 이름 상한(lib/classify/item.mjs 의 ITEM_MAX_LENGTH). 넘는 메모는 항목 기본값으로 쓰지 않는다. */
+const ITEM_LIMIT = 40;
+
+/** 전체 기간 보기에서 묶음이 속한 달. */
+function MonthBadge({ month }: { month: string }) {
+  return (
+    <span
+      data-testid="group-month"
+      className="mr-2 inline-block rounded bg-zinc-800 px-1.5 py-0.5 align-middle text-xs font-normal text-white tabular-nums dark:bg-zinc-200 dark:text-zinc-900"
+    >
+      {month}
+    </span>
+  );
+}
+
+/** 묶음 이름 아래의 메모 — 작은 회색 글씨(report 의 항목 줄과 같은 모양). */
+function GroupMemo({ memo }: { memo: string | null }) {
+  if (memo === null) return null;
+  return (
+    <span data-testid="group-memo" className="block text-xs font-normal text-zinc-400 dark:text-zinc-500">
+      메모: {memo}
+    </span>
+  );
+}
 const INPUT =
   "rounded-md border border-zinc-300 bg-transparent px-2 py-1 text-sm dark:border-zinc-700";
 const BUTTON =
@@ -189,11 +224,14 @@ export function GroupForm({
   group,
   categories,
   hideOnApply = false,
+  showMonth = false,
 }: {
   month: string;
   group: ClassifyGroup;
   categories: string[];
   hideOnApply?: boolean;
+  /** 전체 기간 보기: 묶음이 속한 달을 이름 앞에 붙인다(이번만이 그 달에만 적용된다). */
+  showMonth?: boolean;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -202,8 +240,16 @@ export function GroupForm({
   const [category, setCategory] = useState(
     !group.mixed && group.category !== null && categories.includes(group.category) ? group.category : "",
   );
-  const [item, setItem] = useState(!group.mixedItem && group.item !== null ? group.item : group.key);
+  // 항목 기본값: 사람이 이미 정한 항목 -> (메모가 있으면) 메모 -> 적요. 메모가 항목 이름인
+  // 경우가 많다(예: 적요는 보낸 사람 이름, 메모는 `길동 IRP`).
+  const memoAsItem = group.memo !== null && [...group.memo].length <= ITEM_LIMIT ? group.memo : null;
+  const [item, setItem] = useState(
+    !group.mixedItem && group.item !== null && group.item !== group.key ? group.item : (memoAsItem ?? group.key),
+  );
   const [scope, setScope] = useState<"once" | "always">("once");
+  // ‘앞으로도’ 의 기준. 메모가 있는 묶음에서만 메모를 고를 수 있다.
+  const [basis, setBasis] = useState<"description" | "memo">("description");
+  const byMemo = scope === "always" && basis === "memo" && group.memo !== null;
   // 적요 패턴으로 저장(앞으로도에서만). 입력칸은 적요에서 만든 제안으로 미리 채운다.
   const [usePattern, setUsePattern] = useState(false);
   const [pattern, setPattern] = useState(() => suggestPattern(group.key));
@@ -226,13 +272,15 @@ export function GroupForm({
         month,
         account: group.account?.role,
         key: group.key,
+        memo: group.memo,
+        basis: byMemo ? "memo" : undefined,
         direction: group.direction,
         category: chosen,
         item,
         // '이번만'에서는 뜻이 없다(JSON.stringify 가 undefined 키를 뺀다).
         // 패턴은 '앞으로도' 에서만 보낸다. 서버가 같은 규칙으로 다시 검사하고, 지금 고른
         // 적요와 맞는지도 서버가 확인한다.
-        pattern: scope === "always" && usePattern ? pattern : undefined,
+        pattern: scope === "always" && usePattern && !byMemo ? pattern : undefined,
       });
       if (!ok) {
         setCollapsed(false);
@@ -269,9 +317,11 @@ export function GroupForm({
         className="flex flex-wrap items-baseline justify-between gap-2 rounded-md border border-dashed border-zinc-300 px-3 py-2 text-xs text-zinc-500 dark:border-zinc-700"
       >
         <span className="break-all">
+          {showMonth ? <MonthBadge month={month} /> : null}
           <AccountBadge account={group.account} />
           <DirectionBadge direction={group.direction} />
           {group.key}
+          <GroupMemo memo={group.memo} />
         </span>
         <span role="status">
           {status.kind === "done" ? `${status.text} 목록에서 뺐습니다.` : `‘${category}’(으)로 적용하는 중…`}
@@ -288,9 +338,11 @@ export function GroupForm({
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="font-medium break-all">
+          {showMonth ? <MonthBadge month={month} /> : null}
           <AccountBadge account={group.account} />
           <DirectionBadge direction={group.direction} />
           {group.key}
+          <GroupMemo memo={group.memo} />
         </p>
         <p className="tabular-nums text-zinc-600 dark:text-zinc-400">
           {group.count}건 · {FLOW.format(group.total)}원
@@ -351,7 +403,7 @@ export function GroupForm({
               checked={scope === "once"}
               onChange={() => setScope("once")}
             />
-            이번만
+            {showMonth ? `이번만(${month})` : "이번만"}
           </label>
           <label className="flex items-center gap-1">
             <input
@@ -364,7 +416,32 @@ export function GroupForm({
             앞으로도
           </label>
         </fieldset>
-        {scope === "always" ? (
+        {scope === "always" && group.memo !== null ? (
+          <fieldset className="flex items-center gap-3 text-xs text-zinc-600 dark:text-zinc-400" data-testid="basis">
+            <legend className="sr-only">앞으로도 기준</legend>
+            <label className="flex items-center gap-1">
+              <input
+                type="radio"
+                name={`basis-${uid}`}
+                value="description"
+                checked={basis === "description"}
+                onChange={() => setBasis("description")}
+              />
+              적요 기준
+            </label>
+            <label className="flex items-center gap-1">
+              <input
+                type="radio"
+                name={`basis-${uid}`}
+                value="memo"
+                checked={basis === "memo"}
+                onChange={() => setBasis("memo")}
+              />
+              이 메모 기준
+            </label>
+          </fieldset>
+        ) : null}
+        {scope === "always" && !byMemo ? (
           <label className="flex items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400">
             <input type="checkbox" checked={usePattern} onChange={(event) => setUsePattern(event.target.checked)} />
             달마다 바뀌는 부분이 있어요 — 패턴으로 저장
@@ -374,7 +451,14 @@ export function GroupForm({
           {status.kind === "busy" ? "저장 중…" : "적용"}
         </button>
       </div>
-      {scope === "always" && usePattern ? (
+      {byMemo ? (
+        <p className="text-xs text-zinc-500">
+          메모가 <strong>{group.memo}</strong> 인 {DIRECTION_TEXT[group.direction]} 거래라면 적요 · 계좌 · 달과
+          무관하게 이 분류를 붙입니다(‘이번만’으로 고른 거래는 그대로). 메모 기준 매핑은 적요 기준 매핑보다 먼저
+          걸립니다.
+        </p>
+      ) : null}
+      {scope === "always" && usePattern && !byMemo ? (
         <PatternEditor
           id={`pattern-${uid}`}
           value={pattern}
@@ -748,6 +832,159 @@ export function MappingRow({ mapping, categories }: { mapping: Mapping; categori
           </button>
         </div>
       )}
+      <StatusLine status={status} />
+    </div>
+  );
+}
+
+/** 메모 기준 매핑 한 줄 — 수정 · 삭제. 서버는 `/api/classify/mappings` 에 `basis: "memo"` 로 받는다. */
+export function MemoMappingRow({ mapping, categories }: { mapping: MemoMapping; categories: string[] }) {
+  const router = useRouter();
+  const [editing, setEditing] = useState(false);
+  const [category, setCategory] = useState(categories.includes(mapping.category) ? mapping.category : "");
+  const [item, setItem] = useState(mapping.item ?? "");
+  const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const uid = useId();
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (category === "") {
+      setStatus({ kind: "error", text: "분류를 골라 주세요." });
+      return;
+    }
+    setStatus({ kind: "busy" });
+    try {
+      const { ok, data } = await post("/api/classify/mappings", {
+        basis: "memo",
+        action: "update",
+        memo: mapping.memo,
+        direction: mapping.direction,
+        category,
+        item: item === "" ? null : item,
+      });
+      if (!ok) {
+        setStatus({ kind: "error", text: failureText(data) });
+        return;
+      }
+      setStatus({ kind: "done", text: `저장했습니다 · ${String(data.updated ?? 0)}건에 반영.` });
+      setEditing(false);
+      router.refresh();
+    } catch {
+      setStatus({ kind: "error", text: "서버에 연결하지 못했습니다." });
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm("이 메모 매핑을 지울까요? 이 매핑으로 분류된 거래가 다시 분류됩니다(‘이번만’으로 고른 거래는 그대로).")) {
+      return;
+    }
+    setStatus({ kind: "busy" });
+    try {
+      const { ok, data } = await post("/api/classify/mappings", {
+        basis: "memo",
+        action: "delete",
+        memo: mapping.memo,
+        direction: mapping.direction,
+      });
+      if (!ok) {
+        setStatus({ kind: "error", text: failureText(data) });
+        return;
+      }
+      setStatus({
+        kind: "done",
+        text: `지웠습니다 · 다시 분류 ${String(data.reclassified ?? 0)}건, 미분류 ${String(data.unclassified ?? 0)}건.`,
+      });
+      router.refresh();
+    } catch {
+      setStatus({ kind: "error", text: "서버에 연결하지 못했습니다." });
+    }
+  }
+
+  return (
+    <div
+      data-testid="memo-mapping-row"
+      className="flex flex-col gap-2 rounded-md border border-zinc-300 p-3 text-sm dark:border-zinc-700"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="font-medium break-all">
+          <DirectionBadge direction={mapping.direction} />
+          <span className="text-xs font-normal text-zinc-500">메모</span> {mapping.memo}
+        </p>
+        <p className="text-xs text-zinc-500">
+          {mapping.category} · {mapping.item ?? "(적요 그대로)"} · {mapping.updatedAt.slice(0, 10)}
+        </p>
+      </div>
+      {editing ? (
+        <form onSubmit={save} className="flex flex-wrap items-center gap-2">
+          <label htmlFor={`memo-category-${uid}`} className="text-xs text-zinc-600 dark:text-zinc-400">
+            분류
+          </label>
+          <CategorySelect id={`memo-category-${uid}`} value={category} onChange={setCategory} categories={categories} />
+          <label htmlFor={`memo-item-${uid}`} className="text-xs text-zinc-600 dark:text-zinc-400">
+            항목
+          </label>
+          <input
+            id={`memo-item-${uid}`}
+            type="text"
+            value={item}
+            placeholder="비우면 적요 그대로"
+            onChange={(event) => setItem(event.target.value)}
+            className={`${INPUT} min-w-0 flex-1`}
+            autoComplete="off"
+          />
+          <button type="submit" className={BUTTON} disabled={status.kind === "busy"}>
+            저장
+          </button>
+          <button type="button" className={BUTTON} onClick={() => setEditing(false)}>
+            취소
+          </button>
+        </form>
+      ) : (
+        <div className="flex gap-2">
+          <button type="button" className={BUTTON} onClick={() => setEditing(true)}>
+            수정
+          </button>
+          <button type="button" className={BUTTON} onClick={remove} disabled={status.kind === "busy"}>
+            삭제
+          </button>
+        </div>
+      )}
+      <StatusLine status={status} />
+    </div>
+  );
+}
+
+/**
+ * ‘미분류 다시 분류’ 버튼. 저장된 미분류 거래만 지금의 분류기(메모 매핑 · 적요 매핑 · 패턴 ·
+ * 적요와 메모를 함께 보는 규칙)로 다시 본다. 이미 분류된 거래는 건드리지 않는다.
+ */
+export function ReclassifyButton() {
+  const router = useRouter();
+  const [status, setStatus] = useState<Status>({ kind: "idle" });
+
+  async function run() {
+    setStatus({ kind: "busy" });
+    try {
+      const { ok, data } = await post("/api/classify/reclassify", {});
+      if (!ok) {
+        setStatus({ kind: "error", text: failureText(data) });
+        return;
+      }
+      setStatus({
+        kind: "done",
+        text: `미분류 ${String(data.scanned ?? 0)}건 중 ${String(data.classified ?? 0)}건을 분류했습니다.`,
+      });
+      router.refresh();
+    } catch {
+      setStatus({ kind: "error", text: "서버에 연결하지 못했습니다." });
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2" data-testid="reclassify">
+      <button type="button" className={BUTTON} onClick={run} disabled={status.kind === "busy"}>
+        {status.kind === "busy" ? "분류하는 중…" : "미분류 다시 분류(메모 포함)"}
+      </button>
       <StatusLine status={status} />
     </div>
   );

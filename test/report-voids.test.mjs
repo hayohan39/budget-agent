@@ -19,7 +19,7 @@ import {
   voidPair,
 } from '../lib/report/voids.mjs';
 import { handleVoidPost } from '../lib/classify/http.mjs';
-import { CLASSIFY_FILTERS, countUnclassified, listClassifyGroups } from '../lib/classify/manual.mjs';
+import { CLASSIFY_FILTERS, countUnclassified, listAllPeriodGroups, listClassifyGroups } from '../lib/classify/manual.mjs';
 import { insertTransactions } from '../lib/db/transactions.mjs';
 import { withScratchDatabase } from './helpers/scratch-db.mjs';
 
@@ -298,6 +298,9 @@ test('실제 DB: 무효 처리 · 검사 · 목록 · 해제, 현금흐름표와
       groups.filter((g) => g.key === '길동 IRP').reduce((sum, g) => sum + g.count, 0),
       3, // out2 · other · fixed
     );
+    // 전체 기간 보기도 한 달 보기와 같이 무효 거래를 뺀다.
+    const allPeriod = await listAllPeriodGroups(client, CLASSIFY_FILTERS.all);
+    assert.deepEqual(allPeriod.months.find((m) => m.month === '2026-07').groups, groups);
 
     // 해제.
     assert.deepEqual(await unvoidPair(client, { pairId: made.pairId }), { ok: true });
