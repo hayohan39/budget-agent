@@ -83,6 +83,7 @@ test('fixture 한 달치는 검산을 통과한다', () => {
     expected: -441865,
     actual: -441865,
     difference: 0,
+    inferred: false,
     reason: null,
   });
 });
@@ -126,16 +127,46 @@ test('수동 보정 입력으로 검산을 덮을 수 없다(보정은 집계에
   assert.deepEqual(result, verifyMonthlyReport(report(fixtureRows())));
 });
 
-test('경계 행의 잔액이 비면 검산하지 않고 사유를 남긴다', () => {
+test('경계 행의 잔액 칸이 비면 가까운 잔액에서 금액으로 이어 검산하고 inferred 로 밝힌다', () => {
+  const rows = [
+    row({ id: '3', txn_at: '2026-08-01T00:00:00+09:00', amount: '1000', balance: null }),
+    row({ id: '2', txn_at: '2026-08-15T00:00:00+09:00', amount: '-500', balance: '10500' }),
+    row({ id: '1', txn_at: '2026-08-30T00:00:00+09:00', amount: '2000', balance: '12500' }),
+  ];
+
+  const result = verifyMonthlyReport(report(rows));
+  assert.equal(result.checked, true);
+  assert.equal(result.ok, true);
+  assert.equal(result.inferred, true);
+  assert.equal(result.reason, null);
+});
+
+test('잔액을 이어 계산해도 잔액이 있는 두 행 사이에서 빠진 거래는 여전히 드러난다', () => {
+  const rows = [
+    row({ id: '4', txn_at: '2026-08-01T00:00:00+09:00', amount: '1000', balance: null }),
+    row({ id: '3', txn_at: '2026-08-10T00:00:00+09:00', amount: '-500', balance: '10500' }),
+    // id 2(-300, 잔액 10200)가 파일에서 빠졌다.
+    row({ id: '1', txn_at: '2026-08-30T00:00:00+09:00', amount: '2000', balance: '12200' }),
+  ];
+
+  const result = verifyMonthlyReport(report(rows));
+  assert.equal(result.checked, true);
+  assert.equal(result.ok, false);
+  assert.equal(result.difference, 300);
+  assert.equal(result.inferred, true);
+});
+
+test('그 달의 잔액 칸이 전부 비면 검산하지 않고 사유를 남긴다', () => {
   const rows = [
     row({ id: '2', txn_at: '2026-08-01T00:00:00+09:00', amount: '1000', balance: null }),
-    row({ id: '1', txn_at: '2026-08-30T00:00:00+09:00', amount: '2000', balance: '12500' }),
+    row({ id: '1', txn_at: '2026-08-30T00:00:00+09:00', amount: '2000', balance: null }),
   ];
 
   const result = verifyMonthlyReport(report(rows));
   assert.equal(result.checked, false);
   assert.equal(result.ok, null);
   assert.equal(result.difference, null);
+  assert.equal(result.inferred, false);
   assert.equal(result.reason, VERIFY_REASONS.balanceMissing);
 });
 
@@ -220,4 +251,32 @@ test('결과에 적요·메모가 들어가지 않는다', () => {
   for (const leak of ['김철수', '홍길동', '삼성카드', '비상금 계좌']) {
     assert.ok(!serialized.includes(leak), `${leak} 이(가) 새어 나왔다`);
   }
+});
+
+test('fixture: 잔액 0 뒤 첫 입금(H18)이 구간의 첫 거래여도 시작 잔액 0 으로 검산한다', () => {
+  // fixture 는 최신순이다. 10~18행(=앞 9건)만 남기면 H18 이 그 구간의 가장 이른 거래다.
+  // H19 의 잔액이 0 이므로 H18 직전 잔액은 0 이어야 한다.
+  const rows = fixtureRows().slice(0, 9);
+  const built = report(rows);
+  const main = built.계좌별잔액변화.find((entry) => entry.role === 'main');
+  assert.equal(main.derived, true);
+  assert.equal(main.opening, 0);
+  assert.equal(main.closing, 7279186);
+  assert.equal(main.inferredOpening, true);
+
+  const result = verifyMonthlyReport(built);
+  assert.equal(result.checked, true);
+  assert.equal(result.ok, true);
+  assert.equal(result.inferred, true);
+});
+
+test('fixture: H18 이 구간의 마지막 거래여도 끝 잔액을 이어 계산한다', () => {
+  // 18~33행(=뒤 16건). H18 이 가장 늦은 거래이고 잔액 칸이 비어 있다.
+  const rows = fixtureRows().slice(8);
+  const built = report(rows);
+  const main = built.계좌별잔액변화.find((entry) => entry.role === 'main');
+  assert.equal(main.derived, true);
+  assert.equal(main.closing, 3500000);
+  assert.equal(main.inferredClosing, true);
+  assert.equal(verifyMonthlyReport(built).ok, true);
 });
