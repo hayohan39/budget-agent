@@ -374,3 +374,93 @@ test('실제 DB: 메모 기준 앞으로도 · 이번만 · 적요 기준 앞으
     assert.equal((await applyClassification(client, { ...base, memo: '다른 메모', basis: 'memo' })).error, 'keyNotFound');
   });
 });
+
+// ── 메모 매핑의 항목이 메모(키)와 같을 때(PR #19 리뷰) ───────────────────────
+//
+// 메모 매핑은 보통 항목 = 메모로 만들어진다(묶음 폼의 기본값, 메모 매핑 수정 폼은 저장된
+// 항목을 미리 채운다). 예전에는 수정 요청이 메모와 같은 항목을 null 로 줄였고, null 은
+// 행마다의 적요로 풀려서(resolveItem) 한 줄이던 저축 항목이 적요마다 흩어졌다.
+
+test('요청: 메모 매핑의 항목은 메모 · 묶음 적요와 같아도 그대로 둔다(적요 매핑은 예전처럼 null)', () => {
+  const update = (item, memo = '길동 IRP') =>
+    parseMemoMappingRequest({ action: 'update', memo, direction: 'out', category: '저축', item }).value.item;
+  assert.equal(update('길동 IRP'), '길동 IRP');
+  assert.equal(update('  길동   IRP '), '길동 IRP');
+  assert.equal(update('IRP'), 'IRP');
+  assert.equal(update(''), null);
+  assert.equal(update(null), null);
+  // 40자를 넘는 메모와 같은 값(미리 채운 값 그대로)은 거부하지 않고 예전처럼 null.
+  const long = '가'.repeat(ITEM_MAX_LENGTH + 1);
+  assert.equal(update(long, long), null);
+  assert.equal(
+    parseMemoMappingRequest({ action: 'update', memo: '길동 IRP', direction: 'out', category: '저축', item: long }).error,
+    'itemTooLong',
+  );
+
+  // 만들기(메모 기준 앞으로도): 메모와 같은 항목도, 묶음 적요와 같은 항목도 그대로.
+  const memoBasis = { ...VALID, memo: '길동 IRP', basis: 'memo' };
+  assert.equal(parseClassifyRequest({ ...memoBasis, item: '길동 IRP' }).value.item, '길동 IRP');
+  assert.equal(parseClassifyRequest({ ...memoBasis, item: '홍길동' }).value.item, '홍길동');
+  const longKey = '나'.repeat(ITEM_MAX_LENGTH + 1);
+  assert.equal(parseClassifyRequest({ ...memoBasis, key: longKey, item: longKey }).value.item, null);
+  // 적요 기준 · 이번만은 예전 그대로: 적요와 같은 항목은 null(행의 적요가 곧 키다).
+  assert.equal(parseClassifyRequest({ ...VALID, memo: '길동 IRP', item: '홍길동' }).value.item, null);
+  assert.equal(parseClassifyRequest({ ...VALID, scope: 'once', memo: '길동 IRP', item: '홍길동' }).value.item, null);
+  assert.equal(parseClassifyRequest({ ...VALID, memo: '길동 IRP', item: '길동 IRP' }).value.item, '길동 IRP');
+});
+
+async function reportRows(client, month) {
+  const result = await client.query(
+    `SELECT id, account_id, txn_at, description, txn_type, amount, balance, memo, category, category_source, item, is_transfer
+       FROM transactions WHERE year_month = $1 ORDER BY id`,
+    [month],
+  );
+  return result.rows;
+}
+
+test('실제 DB: 항목 = 메모인 메모 매핑을 만들고 분류만 고쳐도 항목이 남고, 현금흐름표 줄이 흩어지지 않는다', async (t) => {
+  await withScratchDatabase(t, 'memo_item_keep', async (client) => {
+    // 같은 메모 · 같은 방향, 적요는 제각각(합성).
+    await insertTransactions(client, [
+      record(1, { memo: '길동 IRP' }),
+      record(2, { memo: '길동 IRP', description: '길동' }),
+      record(3, { memo: '길동 IRP', description: '자동이체 가상은행', txn_type: '자동이체' }),
+    ]);
+    const itemsOf = async () => (await rows(client)).map((r) => [r[4], r[5], r[6]]);
+    // 항목별 섹션 이름(저축은 고정지출1).
+    const lines = async (section) =>
+      aggregateMonthly({ yearMonth: '2026-07', accounts: ACCOUNTS, rows: await reportRows(client, '2026-07') }).항목별[section].map(
+        (line) => [line.category, line.item, line.count],
+      );
+
+    // 만들기: 폼 기본값 그대로(항목 = 메모).
+    assert.deepEqual(
+      await applyClassification(client, { ...VALID, memo: '길동 IRP', basis: 'memo', category: '변동비', item: '길동 IRP' }),
+      { ok: true, updated: 3, mapped: true },
+    );
+    assert.deepEqual((await listMemoMappings(client)).map((m) => m.item), ['길동 IRP']);
+    assert.deepEqual(await itemsOf(), Array(3).fill(['변동비', '길동 IRP', 'map']));
+    assert.deepEqual(await lines('변동비'), [['변동비', '길동 IRP', 3]]);
+
+    // 수정: 분류만 바꾸고 항목은 수정 폼이 미리 채운 값(= 메모) 그대로.
+    assert.deepEqual(
+      await updateMemoMapping(client, { memo: '길동 IRP', direction: 'out', category: '저축', item: '길동 IRP' }),
+      { ok: true, updated: 3 },
+    );
+    assert.deepEqual(
+      (await listMemoMappings(client)).map((m) => [m.memo, m.category, m.item]),
+      [['길동 IRP', '저축', '길동 IRP']],
+    );
+    assert.deepEqual(await itemsOf(), Array(3).fill(['저축', '길동 IRP', 'map']));
+    assert.deepEqual(await lines('고정지출1'), [['저축', '길동 IRP', 3]]);
+
+    // 만들기에서 묶음 적요와 같은 항목을 골라도 그대로 저장된다(다른 적요의 행도 같은 줄).
+    assert.deepEqual(
+      await applyClassification(client, { ...VALID, memo: '길동 IRP', basis: 'memo', category: '저축', item: '홍길동' }),
+      { ok: true, updated: 3, mapped: true },
+    );
+    assert.deepEqual((await listMemoMappings(client)).map((m) => m.item), ['홍길동']);
+    assert.deepEqual(await itemsOf(), Array(3).fill(['저축', '홍길동', 'map']));
+    assert.deepEqual(await lines('고정지출1'), [['저축', '홍길동', 3]]);
+  });
+});
