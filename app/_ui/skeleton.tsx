@@ -17,10 +17,7 @@ export function LoadingShell({
 }) {
   return (
     <main className={`mx-auto flex w-full ${width} flex-1 flex-col gap-6 p-8`} aria-busy="true">
-      <div className="flex items-baseline justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-        <Bar className="h-4 w-24" />
-      </div>
+      <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
       <p role="status" className="sr-only">
         불러오는 중…
       </p>

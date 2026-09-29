@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 import { ImportForm } from "./import-form";
 
 // middleware 가 세션과 화이트리스트를 모두 막는다(matcher 가 /import 와
@@ -8,15 +6,7 @@ import { ImportForm } from "./import-form";
 export default function ImportPage() {
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 p-8">
-      <div className="flex items-baseline justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">거래내역 올리기</h1>
-        <Link
-          href="/"
-          className="text-sm text-zinc-600 underline underline-offset-4 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-        >
-          홈
-        </Link>
-      </div>
+      <h1 className="text-2xl font-semibold tracking-tight">거래내역 올리기</h1>
       <p className="text-sm text-zinc-600 dark:text-zinc-400">
         토스뱅크 앱에서 내려받은 거래내역 엑셀(.xlsx) 파일을 담고, 미리보기로
         확인한 뒤, 체크한 파일만 월별 현금흐름에 적용합니다. 메인 · 고정비 ·
