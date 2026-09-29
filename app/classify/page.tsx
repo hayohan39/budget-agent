@@ -31,6 +31,7 @@ import {
   ALL_MONTHS,
   CLASSIFY_FILTERS,
   MAX_ALL_PERIOD_ROWS,
+  classifyMonthHref,
   listAllPeriodGroups,
   listClassifyGroups,
   listMappings,
@@ -282,7 +283,7 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
                       {monthSection.month}
                       <span className="ml-2 text-xs font-normal text-zinc-500">
                         {monthSection.groups.length}묶음 ·{" "}
-                        <Link href={`/classify?month=${monthSection.month}`} className="underline underline-offset-4">
+                        <Link href={classifyMonthHref(monthSection.month, filter)} className="underline underline-offset-4">
                           이 달만 보기
                         </Link>
                       </span>

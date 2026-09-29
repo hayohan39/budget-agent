@@ -11,7 +11,9 @@ import assert from 'node:assert/strict';
 
 import {
   CLASSIFY_FILTERS,
+  MAX_ALL_PERIOD_ROWS,
   applyClassification,
+  classifyMonthHref,
   listAllPeriodGroups,
   listClassifyGroups,
   parseClassifyRequest,
@@ -23,6 +25,91 @@ test('쓰기 요청의 달은 여전히 YYYY-MM 만 받는다(전체 기간에�
   const base = { scope: 'once', account: 'main', key: '가게', direction: 'out', category: '변동비' };
   assert.equal(parseClassifyRequest({ ...base, month: 'all' }).error, 'badMonth');
   assert.equal(parseClassifyRequest({ ...base, month: '2026-07' }).ok, true);
+});
+
+test('"이 달만 보기" 링크는 지금 보기 필터를 싣는다(모르는 필터는 기본값, 달은 YYYY-MM 만)', () => {
+  assert.equal(classifyMonthHref('2026-07', CLASSIFY_FILTERS.all), '/classify?month=2026-07&filter=all');
+  assert.equal(classifyMonthHref('2026-07', CLASSIFY_FILTERS.unclassified), '/classify?month=2026-07&filter=unclassified');
+  assert.equal(classifyMonthHref('2026-07', '"><script>'), '/classify?month=2026-07&filter=unclassified');
+  assert.equal(classifyMonthHref('2026-07', undefined), '/classify?month=2026-07&filter=unclassified');
+  assert.throws(() => classifyMonthHref('all', CLASSIFY_FILTERS.all));
+});
+
+/**
+ * 상한 경계 — DB 없이. `LIMIT MAX + 1` 로 읽은 행을 흉내 내는 가짜 client.
+ * `months` 는 [달, 행 수] 를 최신 달부터.
+ */
+function fakeClient(months) {
+  const all = [];
+  for (const [month, count] of months) {
+    for (let i = 0; i < count; i += 1) {
+      all.push({
+        year_month: month,
+        id: String(all.length + 1),
+        account_id: 1,
+        txn_at: `${month}-01T09:00:00+09:00`,
+        description: '가게',
+        memo: null,
+        amount: '-1000',
+        category: null,
+        item: null,
+        category_source: null,
+        is_transfer: false,
+      });
+    }
+  }
+  return {
+    async query(sql, params) {
+      if (/FROM accounts/.test(sql)) return { rows: [{ id: 1, role: 'main', nickname: '메인' }] };
+      return { rows: all.slice(0, params[0]) };
+    },
+  };
+}
+
+test('전체 기간 상한: 달 한가운데서 잘리면 그 (가장 오래된) 달은 반쪽이라 버린다', async () => {
+  const result = await listAllPeriodGroups(
+    fakeClient([
+      ['2026-08', MAX_ALL_PERIOD_ROWS - 10],
+      ['2026-07', 20], // 10건만 상한 안 — 잘린 달
+    ]),
+    CLASSIFY_FILTERS.all,
+  );
+  assert.equal(result.truncated, true);
+  assert.deepEqual(
+    result.months.map((m) => [m.month, m.groups[0].count]),
+    [['2026-08', MAX_ALL_PERIOD_ROWS - 10]],
+  );
+});
+
+test('전체 기간 상한: 달 경계에서 딱 끊기면(다음 행이 더 오래된 달) 마지막 달은 온전하니 남긴다', async () => {
+  const result = await listAllPeriodGroups(
+    fakeClient([
+      ['2026-08', MAX_ALL_PERIOD_ROWS - 10],
+      ['2026-07', 10], // 상한 안에 다 들어온 달
+      ['2026-06', 5], // 상한 밖에서 시작 — 보이지 않는다
+    ]),
+    CLASSIFY_FILTERS.all,
+  );
+  assert.equal(result.truncated, true);
+  assert.deepEqual(
+    result.months.map((m) => [m.month, m.groups[0].count]),
+    [
+      ['2026-08', MAX_ALL_PERIOD_ROWS - 10],
+      ['2026-07', 10],
+    ],
+  );
+});
+
+test('전체 기간 상한: 상한과 정확히 같은 행 수면 잘리지 않았다', async () => {
+  const result = await listAllPeriodGroups(
+    fakeClient([
+      ['2026-08', MAX_ALL_PERIOD_ROWS - 10],
+      ['2026-07', 10],
+    ]),
+    CLASSIFY_FILTERS.all,
+  );
+  assert.equal(result.truncated, false);
+  assert.deepEqual(result.months.map((m) => m.month), ['2026-08', '2026-07']);
 });
 
 function record(n, overrides = {}) {
