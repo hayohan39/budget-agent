@@ -56,8 +56,8 @@ const NOTE: Record<SeriesKey, string> = {
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 p-8">
-      <h1 className="text-2xl font-semibold tracking-tight">가계부 통계</h1>
+    <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-4 py-6 sm:px-8 sm:py-8">
+      <h1 className="text-xl font-semibold tracking-tight">가계부 통계</h1>
       {children}
     </main>
   );
@@ -66,14 +66,14 @@ function Shell({ children }: { children: React.ReactNode }) {
 function RangePicker({ selected }: { selected: string }) {
   return (
     <Form action="/stats" className="flex items-center gap-2">
-      <label htmlFor="range" className="text-sm text-zinc-600 dark:text-zinc-400">
+      <label htmlFor="range" className="text-[13px] text-muted">
         기간
       </label>
       <select
         id="range"
         name="range"
         defaultValue={selected}
-        className="rounded-md border border-zinc-300 bg-transparent px-2 py-1 text-sm dark:border-zinc-700"
+        className="h-8 rounded-md border border-control bg-canvas px-2 text-[13px]"
       >
         {Object.keys(RANGE_TEXT).map((key) => (
           <option key={key} value={key}>
@@ -83,7 +83,7 @@ function RangePicker({ selected }: { selected: string }) {
       </select>
       <button
         type="submit"
-        className="rounded-md border border-zinc-300 px-3 py-1 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
+        className="h-8 rounded-md border border-line-strong bg-canvas px-3 text-[13px] font-medium hover:bg-hover"
       >
         보기
       </button>
@@ -92,25 +92,26 @@ function RangePicker({ selected }: { selected: string }) {
 }
 
 function TrendTable({ points }: { points: TrendPoint[] }) {
-  const cell = "border border-zinc-300 px-2 py-1 dark:border-zinc-700";
+  const cell = "border-b border-line px-3 py-1.5";
   const num = `${cell} text-right tabular-nums whitespace-nowrap`;
+  const head = `${cell} whitespace-nowrap bg-subtle py-1 text-xs font-medium text-muted`;
   return (
     // 좁은 화면에서는 표만 가로로 밀린다(페이지 전체가 넘치지 않게).
-    <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-sm">
-        <caption className="mb-2 text-left text-sm font-medium text-zinc-700 dark:text-zinc-300">
+    <div className="min-w-0 overflow-x-auto rounded-lg border border-line">
+      <table className="w-full border-collapse text-[13px] [&>tbody>tr:last-child>*]:border-b-0">
+        <caption className="border-b border-line px-3 py-2 text-left text-[13px] font-semibold text-fg">
           표로 보기
-          <span className="ml-2 text-xs font-normal text-zinc-500">
+          <span className="ml-2 text-xs font-normal text-muted">
             수입은 들어온 돈, 나머지는 나간 돈의 크기입니다(변동비는 일회성 수입을 뺀 값)
           </span>
         </caption>
         <thead>
-          <tr className="text-xs text-zinc-500">
-            <th scope="col" className={`${cell} text-left font-normal`}>
+          <tr>
+            <th scope="col" className={`${head} text-left`}>
               월
             </th>
             {TREND_SERIES.map((series) => (
-              <th key={series.key} scope="col" className={`${cell} text-right font-normal`}>
+              <th key={series.key} scope="col" className={`${head} text-right`}>
                 {series.label}
               </th>
             ))}
@@ -120,18 +121,21 @@ function TrendTable({ points }: { points: TrendPoint[] }) {
           {[...points].reverse().map((point) => (
             <tr key={point.yearMonth}>
               <th scope="row" className={`${cell} whitespace-nowrap text-left font-normal`}>
-                <Link href={`/report?month=${point.yearMonth}`} className="underline underline-offset-4">
+                <Link href={`/report?month=${point.yearMonth}`} className="text-accent-text underline-offset-4 hover:underline">
                   {point.yearMonth}
                 </Link>
               </th>
               {point.hasData ? (
                 TREND_SERIES.map((series) => (
-                  <td key={series.key} className={num}>
+                  <td
+                    key={series.key}
+                    className={`${num} ${(point[series.key as SeriesKey] ?? 0) < 0 ? "text-neg" : ""}`}
+                  >
                     {won(point[series.key as SeriesKey] ?? 0)}
                   </td>
                 ))
               ) : (
-                <td colSpan={TREND_SERIES.length} className={`${cell} text-center text-zinc-500`}>
+                <td colSpan={TREND_SERIES.length} className={`${cell} text-center text-muted`}>
                   데이터 없음
                 </td>
               )}
@@ -153,7 +157,7 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
   if (!isAllowedEmail(session.user?.email)) {
     return (
       <Shell>
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-[13px] text-danger">
           접근 권한이 없습니다.
         </p>
       </Shell>
@@ -171,7 +175,7 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
   } catch {
     return (
       <Shell>
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-[13px] text-danger">
           데이터를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.
         </p>
       </Shell>
@@ -183,19 +187,19 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
       <RangePicker selected={range} />
       {points.length === 0 ? (
         <>
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          <p className="text-[13px] text-muted">
             아직 저장된 거래가 없습니다. 거래내역을 먼저 올려주세요.
           </p>
           <Link
             href="/import"
-            className="self-start rounded-md border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
+            className="self-start inline-flex h-9 items-center rounded-md border border-line-strong bg-canvas px-4 text-[13px] font-medium hover:bg-hover"
           >
             거래내역 올리기
           </Link>
         </>
       ) : (
         <>
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-muted">
             달마다 월별 현금흐름표와 같은 집계에서 나온 값입니다. 수입은 메인 계좌로 들어온
             돈이고(메인 ↔ 고정비 · 비상금 계좌 사이의 이체와 그 계좌들의 입금 · 이자, 변동비로
             분류한 일회성 수입 · 미분류 입금은 넣지 않습니다), 저축 · 주거비 · 고정비 · 카드비는

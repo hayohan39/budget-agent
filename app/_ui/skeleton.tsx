@@ -3,7 +3,7 @@
 // 링크를 눌렀을 때 화면이 멈춘 것처럼 보이지 않게 한다.
 
 export function Bar({ className = "" }: { className?: string }) {
-  return <div aria-hidden className={`animate-pulse rounded bg-zinc-200 dark:bg-zinc-800 ${className}`} />;
+  return <div aria-hidden className={`animate-pulse rounded-md bg-hover ${className}`} />;
 }
 
 export function LoadingShell({
@@ -16,8 +16,8 @@ export function LoadingShell({
   children: React.ReactNode;
 }) {
   return (
-    <main className={`mx-auto flex w-full ${width} flex-1 flex-col gap-6 p-8`} aria-busy="true">
-      <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+    <main className={`mx-auto flex w-full ${width} flex-1 flex-col gap-6 px-4 py-6 sm:px-8 sm:py-8`} aria-busy="true">
+      <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
       <p role="status" className="sr-only">
         불러오는 중…
       </p>

@@ -6,8 +6,9 @@
 //     색 다섯 개 + 범례가 필요하고, 수입(수백만)과 주거비(수십만)가 한 축에서
 //     눌린다. 두 번째 y 축은 쓰지 않는다.
 //   - 한 그래프에 계열이 하나라 색은 한 가지(파랑)이고 범례 상자는 없다 — 제목이
-//     무엇을 그렸는지 말한다. 라이트 #2a78d6 / 다크 #3987e5, 각 표면에서 3:1 이상
-//     (dataviz 검증기 통과).
+//     무엇을 그렸는지 말한다. 색은 디자인 토큰 --chart(app/globals.css): 라이트 #3e63dd /
+//     다크 #5b7cf0, 각 표면(#ffffff · #0f1012)에서 3:1 이상(dataviz 검증기 통과).
+//     격자 · 축 · 글자도 토큰(--line · --control · --muted · --faint)을 쓴다.
 //   - 막대는 24px 이하, 값 쪽 끝만 4px 둥글고 기준선 쪽은 각지다. 격자 · 축은 1px
 //     실선의 옅은 회색. 글자는 막대 색을 쓰지 않는다(본문 · 보조 · 흐린 잉크).
 //   - 값은 막대마다 적지 않는다. 머리에 최근 달 값과 전월 대비를 적고, 나머지는
@@ -111,18 +112,18 @@ export function TrendChart({
   const descId = `${id}-desc`;
 
   return (
-    <figure className="flex flex-col gap-2 rounded-md border border-zinc-200 p-4 dark:border-zinc-800">
-      <figcaption className="flex flex-wrap items-baseline justify-between gap-2">
-        <span id={titleId} className="text-sm font-semibold">
+    <figure className="flex min-w-0 flex-col rounded-lg border border-line bg-canvas">
+      <figcaption className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-line px-3 py-2">
+        <span id={titleId} className="text-[13px] font-semibold">
           {title}
-          <span className="ml-2 text-xs font-normal text-zinc-500">{note}</span>
+          <span className="ml-2 text-xs font-normal text-muted">{note}</span>
         </span>
         {latest !== undefined ? (
-          <span className="text-sm">
-            <span className="text-xs text-zinc-500">{latest.yearMonth} </span>
-            <span className="font-semibold">{won(latest.value)}</span>
+          <span className="text-[13px]">
+            <span className="text-xs text-muted">{latest.yearMonth} </span>
+            <span className={`font-semibold tabular-nums ${latest.value < 0 ? "text-neg" : ""}`}>{won(latest.value)}</span>
             {delta !== null ? (
-              <span className="ml-2 text-xs text-zinc-600 dark:text-zinc-400">
+              <span className="ml-2 text-xs tabular-nums text-muted">
                 전월 대비 {delta === 0 ? "변화 없음" : `${SIGNED.format(delta)}원`}
               </span>
             ) : null}
@@ -131,7 +132,7 @@ export function TrendChart({
       </figcaption>
       <svg
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-        className="h-auto w-full"
+        className="h-auto w-full px-2 py-2"
         role="img"
         aria-labelledby={`${titleId} ${descId}`}
       >
@@ -151,8 +152,8 @@ export function TrendChart({
               strokeWidth={1}
               className={
                 tick === 0
-                  ? "stroke-[#c3c2b7] dark:stroke-[#383835]"
-                  : "stroke-[#e1e0d9] dark:stroke-[#2c2c2a]"
+                  ? "stroke-control"
+                  : "stroke-line"
               }
             />
             <text
@@ -160,7 +161,7 @@ export function TrendChart({
               y={y(tick)}
               dy="0.32em"
               textAnchor="end"
-              className="fill-[#6f6d68] text-[13px] tabular-nums dark:fill-[#a3a29b]"
+              className="fill-muted text-[13px] tabular-nums"
             >
               {won(tick)}
             </text>
@@ -187,7 +188,8 @@ export function TrendChart({
                   />
                   <path
                     d={barPath(center - barWidth / 2, barWidth, baseline, y(bar.value))}
-                    className="fill-[#2a78d6] transition-opacity group-hover:opacity-75 group-focus:opacity-75 dark:fill-[#3987e5]"
+                    strokeWidth={2}
+                    className="fill-chart stroke-transparent transition-opacity group-hover:opacity-75 group-focus-visible:stroke-fg"
                   />
                 </g>
               ) : (
@@ -196,7 +198,7 @@ export function TrendChart({
                   x={center}
                   y={baseline - 6}
                   textAnchor="middle"
-                  className="fill-[#b0aea8] text-[12px] dark:fill-[#5c5b57]"
+                  className="fill-faint text-[12px]"
                 >
                   없음
                 </text>
@@ -206,7 +208,7 @@ export function TrendChart({
                   x={center}
                   y={HEIGHT - MARGIN.bottom + 18}
                   textAnchor="middle"
-                  className={`text-[13px] ${bar.value === null ? "fill-[#b0aea8] dark:fill-[#5c5b57]" : "fill-[#6f6d68] dark:fill-[#a3a29b]"}`}
+                  className={`text-[13px] ${bar.value === null ? "fill-faint" : "fill-muted"}`}
                 >
                   {label.month}
                 </text>
@@ -216,7 +218,7 @@ export function TrendChart({
                   x={center}
                   y={HEIGHT - MARGIN.bottom + 34}
                   textAnchor="middle"
-                  className="fill-[#6f6d68] text-[12px] dark:fill-[#a3a29b]"
+                  className="fill-muted text-[12px]"
                 >
                   {label.year}
                 </text>

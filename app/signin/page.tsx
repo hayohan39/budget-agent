@@ -46,10 +46,10 @@ export default async function SignIn({ searchParams }: PageProps<"/signin">) {
   const errorText = signInErrorText(params.error);
 
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
-      <h1 className="text-3xl font-semibold tracking-tight">가계부</h1>
+    <main className="flex flex-1 flex-col items-center justify-center gap-5 px-4 py-10 sm:px-8">
+      <h1 className="text-2xl font-semibold tracking-tight">가계부</h1>
       {errorText !== null ? (
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-[13px] text-danger">
           {errorText}
         </p>
       ) : null}
@@ -61,7 +61,7 @@ export default async function SignIn({ searchParams }: PageProps<"/signin">) {
       >
         <button
           type="submit"
-          className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+          className="h-9 rounded-md bg-inverse px-4 text-[13px] font-medium text-on-inverse hover:bg-inverse-hover"
         >
           Google 로 로그인
         </button>
