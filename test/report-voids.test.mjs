@@ -11,6 +11,9 @@ import assert from 'node:assert/strict';
 import { aggregateMonthly, buildMonthlyReport } from '../lib/report/monthly.mjs';
 import { verifyMonthlyReport } from '../lib/report/verify.mjs';
 import {
+  VOID_ERROR_MESSAGES,
+  VOID_WINDOW_DAYS,
+  checkVoidPair,
   findVoidCandidates,
   listVoidCandidates,
   listVoidedPairs,
@@ -181,6 +184,38 @@ test('후보: 같은 계좌 · 같은 금액 · 반대 방향 · 31일 안. 적�
   assert.deepEqual(findVoidCandidates(rows, '2026-09'), []);
 });
 
+test('checkVoidPair: 후보 찾기와 무효 처리가 함께 쓰는 판정 — 창 · 금고 이동 · 이동 다리까지', () => {
+  const out = candidateRow({ id: '1', amount: '-300000', txn_at: '2026-07-01T09:00:00+09:00' });
+  const at = (iso) => candidateRow({ id: '2', amount: '300000', txn_at: iso });
+  // 창 경계: 정확히 31일은 허용, 1초라도 넘으면 거부. 순서가 바뀌어도 같다.
+  assert.equal(checkVoidPair(out, at('2026-08-01T09:00:00+09:00')).ok, true);
+  assert.equal(checkVoidPair(at('2026-08-01T09:00:00+09:00'), out).ok, true);
+  assert.equal(checkVoidPair(out, at('2026-08-01T09:00:01+09:00')).error, 'outOfWindow');
+  assert.equal(checkVoidPair(out, at('2026-05-31T08:59:59+09:00')).error, 'outOfWindow'); // 입금이 먼저여도 창은 같다
+  assert.equal(checkVoidPair(out, at('not a date')).error, 'outOfWindow');
+  // 금고 이동(비상금 계좌의 `비상금`): 어느 한 쪽만 그래도 거부.
+  const vault = (overrides) => candidateRow({ account_id: 3, role: 'emergency', nickname: '비상금', ...overrides });
+  assert.equal(
+    checkVoidPair(vault({ id: '3', description: '비상금', amount: '-100000' }), vault({ id: '4', description: '비상금', amount: '100000' })).error,
+    'vaultMove',
+  );
+  assert.equal(
+    checkVoidPair(vault({ id: '3', description: '가게', amount: '-100000' }), vault({ id: '4', description: '비상금', amount: '100000' })).error,
+    'vaultMove',
+  );
+  // 내 계좌 간 이동 다리: is_transfer 든 이동 분류든.
+  const plainIn = candidateRow({ id: '6', amount: '500000', txn_at: '2026-07-02T09:00:00+09:00' });
+  assert.equal(checkVoidPair(candidateRow({ id: '5', amount: '-500000', is_transfer: true }), plainIn).error, 'transferLeg');
+  assert.equal(checkVoidPair(candidateRow({ id: '5', amount: '-500000', category: '고정비이체' }), plainIn).error, 'transferLeg');
+  assert.equal(checkVoidPair(candidateRow({ id: '5', amount: '-500000' }), { ...plainIn, category: '비상금이체' }).error, 'transferLeg');
+  // 새 코드마다 고정 문장이 있다(입력값을 싣지 않는다).
+  for (const code of ['outOfWindow', 'vaultMove', 'transferLeg']) {
+    assert.equal(typeof VOID_ERROR_MESSAGES[code], 'string', code);
+    assert.doesNotMatch(VOID_ERROR_MESSAGES[code], /[0-9]{4,}/);
+  }
+  assert.match(VOID_ERROR_MESSAGES.outOfWindow, new RegExp(`${VOID_WINDOW_DAYS}일`));
+});
+
 test('요청 검사: id 는 양의 정수 문자열, 같은 거래 둘은 거부', () => {
   assert.equal(parseVoidRequest({ action: 'void', outId: '12', inId: '13' }).ok, true);
   assert.equal(parseVoidRequest({ action: 'void', outId: '12', inId: '12' }).error, 'sameTransaction');
@@ -334,3 +369,133 @@ test('동시 쓰기: 같은 입금을 두 쌍으로 동시에 무효 처리하�
     assert.equal((await client.query('SELECT count(*)::int AS n FROM voided_pairs')).rows[0].n, 1);
   });
 });
+
+test('실제 DB: 직접 보낸 id 도 후보 조건으로 거부된다(창 · 금고 이동 · 이동 다리), 올바른 쌍은 그대로 된다', async (t) => {
+  await withScratchDatabase(t, 'voids_guard', async (client) => {
+    await insertTransactions(client, [
+      // 창: 7/1 출금 ↔ 8/5 입금(35일) 거부, 7/1 출금 ↔ 8/1 같은 시각 입금(정확히 31일) 허용.
+      record(1, { txn_at: '2026-07-01T09:00:00+09:00', amount: -300000 }),
+      record(2, { txn_at: '2026-08-05T09:00:00+09:00', year_month: '2026-08', txn_type: '입금', amount: 300000 }),
+      record(3, { txn_at: '2026-08-01T09:00:00+09:00', year_month: '2026-08', txn_type: '입금', amount: 300000, dedupe_key: 'test-void-3b' }),
+      // 금고 이동: 비상금 계좌의 `비상금` 출금 ↔ 입금.
+      record(4, { account_id: 3, txn_at: '2026-07-02T09:00:00+09:00', description: '비상금', amount: -100000 }),
+      record(5, { account_id: 3, txn_at: '2026-07-03T09:00:00+09:00', description: '비상금', txn_type: '입금', amount: 100000 }),
+      // 내 계좌 간 이동 다리: 메인의 비상금이체 출금 ↔ 같은 금액 입금.
+      record(6, { txn_at: '2026-07-05T09:00:00+09:00', description: '비상금 계좌', amount: -500000, is_transfer: true, category: '비상금이체', category_source: 'rule' }),
+      record(7, { txn_at: '2026-07-06T09:00:00+09:00', description: '비상금 계좌', txn_type: '입금', amount: 500000 }),
+    ]);
+    const [out, far, near, vaultOut, vaultIn, moveOut, moveIn] = await Promise.all(
+      ['test-void-1', 'test-void-2', 'test-void-3b', 'test-void-4', 'test-void-5', 'test-void-6', 'test-void-7'].map((key) => idOf(client, key)),
+    );
+
+    assert.equal((await voidPair(client, { outId: out, inId: far })).error, 'outOfWindow');
+    assert.equal((await voidPair(client, { outId: far, inId: out })).error, 'outOfWindow');
+    assert.equal((await voidPair(client, { outId: vaultOut, inId: vaultIn })).error, 'vaultMove');
+    assert.equal((await voidPair(client, { outId: moveOut, inId: moveIn })).error, 'transferLeg');
+    assert.equal((await client.query('SELECT count(*)::int AS n FROM voided_pairs')).rows[0].n, 0);
+
+    // HTTP 로도 같은 거부가 고정 문장 · 400 으로 나간다(입력값을 싣지 않는다).
+    const deps = {
+      auth: async () => ({ user: { email: 'owner@example.test' } }),
+      isAllowedEmail: (email) => email === 'owner@example.test',
+      withClient: async (work) => work(client),
+    };
+    const post = (body) =>
+      handleVoidPost(
+        new Request('http://localhost:3000/api/report/voids', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: 'http://localhost:3000', host: 'localhost:3000' },
+          body: JSON.stringify(body),
+        }),
+        deps,
+      );
+    for (const [body, code] of [
+      [{ action: 'void', outId: out, inId: far }, 'outOfWindow'],
+      [{ action: 'void', outId: vaultOut, inId: vaultIn }, 'vaultMove'],
+      [{ action: 'void', outId: moveOut, inId: moveIn }, 'transferLeg'],
+    ]) {
+      const response = await post(body);
+      assert.equal(response.status, 400, code);
+      // 본문은 고정 문장 하나뿐이다.
+      assert.deepEqual(await response.json(), { ok: false, message: VOID_ERROR_MESSAGES[code] }, code);
+    }
+
+    // 후보 목록에 없는 쌍은 거부되고, 있는 쌍(정확히 31일)은 그대로 된다.
+    const listed = await listVoidCandidates(client, '2026-07');
+    assert.deepEqual(listed.map((c) => [c.out.id, c.in.id]), [[out, near]]);
+    const made = await voidPair(client, { outId: near, inId: out });
+    assert.equal(made.ok, true);
+    assert.deepEqual((await listVoidedPairs(client, '2026-07')).map((p) => [p.out.id, p.in.id]), [[out, near]]);
+  });
+});
+
+/** 결정적 의사 난수(mulberry32). 실패를 재현할 수 있게 씨앗을 고정한다. */
+function prng(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let x = state;
+    x = Math.imul(x ^ (x >>> 15), x | 1);
+    x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+test('성질: voidPair 가 받아들이는 쌍은 모두 findVoidCandidates 가 내놓는 쌍이고, 그 역도 같다(상한 제외)', async (t) => {
+  await withScratchDatabase(t, 'voids_property', async (client) => {
+    const random = prng(20260928);
+    const pick = (list) => list[Math.floor(random() * list.length)];
+    const records = [];
+    for (let n = 1; n <= 22; n += 1) {
+      // 6/10 ~ 8/28 사이(한국 시각). 달을 걸치고 창(31일)을 넘는 쌍이 생기게 넓게 흩뿌린다.
+      const day = Math.floor(random() * 80);
+      const at = new Date(Date.UTC(2026, 5, 10, 0, 0, 0) + day * 86400000 + Math.floor(random() * 86400) * 1000);
+      const seoul = new Date(at.getTime() + 9 * 3600000);
+      const yearMonth = `${seoul.getUTCFullYear()}-${String(seoul.getUTCMonth() + 1).padStart(2, '0')}`;
+      const transfer = random() < 0.15;
+      records.push(
+        record(n, {
+          account_id: pick([1, 1, 3]),
+          txn_at: at.toISOString(),
+          year_month: yearMonth,
+          description: pick(['길동 IRP', '비상금', '가게']),
+          amount: pick([-100000, 100000, -200000, 200000]),
+          is_transfer: transfer,
+          category: transfer ? '비상금이체' : pick([null, null, '저축']),
+        }),
+      );
+    }
+    await insertTransactions(client, records);
+    const { rows } = await client.query(
+      `SELECT t.id, t.account_id, t.year_month, t.txn_at, t.description, t.memo, t.amount, t.category, t.is_transfer,
+              to_char(t.txn_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD HH24:MI') AS at_text, a.role, a.nickname
+         FROM transactions t JOIN accounts a ON a.id = t.account_id ORDER BY t.id`,
+    );
+    const months = [...new Set(rows.map((r) => String(r.year_month).trim()))];
+    const listed = new Set(
+      months.flatMap((ym) => findVoidCandidates(rows, ym, { limit: Infinity }).map((c) => `${c.out.id}:${c.in.id}`)),
+    );
+
+    const seen = new Map();
+    for (let i = 0; i < rows.length; i += 1) {
+      for (let j = i + 1; j < rows.length; j += 1) {
+        const [x, y] = random() < 0.5 ? [rows[i], rows[j]] : [rows[j], rows[i]];
+        const outcome = await voidPair(client, { outId: String(x.id), inId: String(y.id) });
+        const outRow = toBigIntSign(x.amount) < 0 ? x : y;
+        const inRow = outRow === x ? y : x;
+        const key = `${outRow.id}:${inRow.id}`;
+        assert.equal(outcome.ok, listed.has(key), `${key} -> ${outcome.ok ? 'ok' : outcome.error}`);
+        seen.set(outcome.ok ? 'ok' : outcome.error, (seen.get(outcome.ok ? 'ok' : outcome.error) ?? 0) + 1);
+        if (outcome.ok) assert.deepEqual(await unvoidPair(client, { pairId: outcome.pairId }), { ok: true });
+      }
+    }
+    // 씨앗이 모든 갈래를 실제로 건드렸는지(성질이 헛돌지 않았는지).
+    for (const code of ['ok', 'outOfWindow', 'vaultMove', 'transferLeg', 'accountMismatch', 'directionMismatch', 'amountMismatch']) {
+      assert.ok((seen.get(code) ?? 0) > 0, code);
+    }
+  });
+});
+
+function toBigIntSign(amount) {
+  return String(amount).trim().startsWith('-') ? -1 : 1;
+}
