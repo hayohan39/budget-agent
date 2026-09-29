@@ -12,12 +12,12 @@ import { aggregateMonthly, buildMonthlyReport } from '../lib/report/monthly.mjs'
 import { verifyMonthlyReport } from '../lib/report/verify.mjs';
 import {
   VOID_ERROR_MESSAGES,
-  VOID_WINDOW_DAYS,
   checkVoidPair,
   findVoidCandidates,
   listVoidCandidates,
   listVoidedPairs,
   parseVoidRequest,
+  seoulDate,
   unvoidPair,
   voidPair,
 } from '../lib/report/voids.mjs';
@@ -150,11 +150,13 @@ function candidateRow(overrides) {
   };
 }
 
-test('후보: 같은 계좌 · 같은 금액 · 반대 방향 · 31일 안. 적요/메모 같음 -> 출금 먼저 -> 가까운 순', () => {
+test('후보: 같은 계좌 · 같은 금액 · 반대 방향 · 한국 시각 같은 날. 적요/메모 같음 -> 출금 먼저 -> 가까운 순', () => {
   const rows = [
     candidateRow({ id: '1', description: '홍길동', memo: '길동 IRP', amount: '-300000' }),
-    candidateRow({ id: '2', description: '한국투자증권', memo: '길동 IRP', amount: '300000', txn_at: '2026-07-05T09:00:00+09:00', at_text: '2026-07-05 09:00' }),
-    candidateRow({ id: '3', description: '김철수', amount: '300000', txn_at: '2026-07-04T09:00:00+09:00', at_text: '2026-07-04 09:00' }),
+    candidateRow({ id: '2', description: '한국투자증권', memo: '길동 IRP', amount: '300000', txn_at: '2026-07-03T11:00:00+09:00', at_text: '2026-07-03 11:00' }),
+    candidateRow({ id: '3', description: '김철수', amount: '300000', txn_at: '2026-07-03T10:00:00+09:00', at_text: '2026-07-03 10:00' }),
+    // 다음 날(한국 시각)의 같은 금액 입금은 후보가 아니다 — 적요 · 메모가 같아도.
+    candidateRow({ id: '11', description: '홍길동', memo: '길동 IRP', amount: '300000', txn_at: '2026-07-04T09:00:00+09:00', at_text: '2026-07-04 09:00' }),
     candidateRow({ id: '4', description: '홍길동', amount: '300000', account_id: 2, role: 'fixed', nickname: '고정비' }), // 다른 계좌
     candidateRow({ id: '5', description: '가게', amount: '-12000' }),
     candidateRow({ id: '6', description: '가게', amount: '12000', txn_at: '2026-09-01T09:00:00+09:00', year_month: '2026-09' }), // 60일 뒤
@@ -166,10 +168,10 @@ test('후보: 같은 계좌 · 같은 금액 · 반대 방향 · 31일 안. 적�
   ];
   const candidates = findVoidCandidates(rows, '2026-07');
   assert.deepEqual(
-    candidates.map((c) => [c.out.id, c.in.id, c.similar, c.outFirst, c.gapDays]),
+    candidates.map((c) => [c.out.id, c.in.id, c.similar, c.outFirst, c.gapMinutes]),
     [
-      ['1', '2', true, true, 2],
-      ['1', '3', false, true, 1],
+      ['1', '2', true, true, 120],
+      ['1', '3', false, true, 60],
     ],
   );
   assert.deepEqual(candidates[0].out, {
@@ -184,15 +186,38 @@ test('후보: 같은 계좌 · 같은 금액 · 반대 방향 · 31일 안. 적�
   assert.deepEqual(findVoidCandidates(rows, '2026-09'), []);
 });
 
-test('checkVoidPair: 후보 찾기와 무효 처리가 함께 쓰는 판정 — 창 · 금고 이동 · 이동 다리까지', () => {
-  const out = candidateRow({ id: '1', amount: '-300000', txn_at: '2026-07-01T09:00:00+09:00' });
-  const at = (iso) => candidateRow({ id: '2', amount: '300000', txn_at: iso });
-  // 창 경계: 정확히 31일은 허용, 1초라도 넘으면 거부. 순서가 바뀌어도 같다.
-  assert.equal(checkVoidPair(out, at('2026-08-01T09:00:00+09:00')).ok, true);
-  assert.equal(checkVoidPair(at('2026-08-01T09:00:00+09:00'), out).ok, true);
-  assert.equal(checkVoidPair(out, at('2026-08-01T09:00:01+09:00')).error, 'outOfWindow');
-  assert.equal(checkVoidPair(out, at('2026-05-31T08:59:59+09:00')).error, 'outOfWindow'); // 입금이 먼저여도 창은 같다
-  assert.equal(checkVoidPair(out, at('not a date')).error, 'outOfWindow');
+test('seoulDate: 서버 시간대와 상관없이 한국 시각의 달력 날짜', () => {
+  assert.equal(seoulDate('2026-07-01T00:00:00+09:00'), '2026-07-01');
+  assert.equal(seoulDate('2026-06-30T15:00:00Z'), '2026-07-01'); // UTC 로는 6/30, 한국 시각 7/1 00:00
+  assert.equal(seoulDate('2026-06-30T14:59:59Z'), '2026-06-30');
+  assert.equal(seoulDate(new Date('2026-12-31T15:30:00Z')), '2027-01-01'); // pg 가 주는 Date 도 받는다
+  assert.equal(seoulDate('not a date'), null);
+  assert.equal(seoulDate(new Date(Number.NaN)), null);
+});
+
+test('checkVoidPair: 한국 시각으로 같은 날 · 같은 금액 · 반대 방향만. 금고 이동 · 이동 다리는 거부', () => {
+  const out = candidateRow({ id: '1', amount: '-300000', txn_at: '2026-07-01T23:59:00+09:00' });
+  const at = (iso, amount = '300000') => candidateRow({ id: '2', amount, txn_at: iso });
+  // 같은 날(한국 시각)이면 시각 차이와 상관없이 허용. 순서가 바뀌어도 같다.
+  assert.equal(checkVoidPair(out, at('2026-07-01T00:00:00+09:00')).ok, true);
+  assert.equal(checkVoidPair(at('2026-07-01T00:00:00+09:00'), out).ok, true);
+  assert.equal(checkVoidPair(out, at('2026-07-01T23:59:59+09:00')).ok, true);
+  // 23:59 -> 다음 날 00:01(2분 차이)은 거부. 입금이 먼저인 전날 23:59 도 거부.
+  assert.equal(checkVoidPair(out, at('2026-07-02T00:01:00+09:00')).error, 'differentDay');
+  assert.equal(checkVoidPair(at('2026-07-02T00:01:00+09:00'), out).error, 'differentDay');
+  assert.equal(checkVoidPair(out, at('2026-06-30T23:59:00+09:00')).error, 'differentDay');
+  // UTC 날짜는 같지만(7/1) 한국 날짜가 다르다: 7/1 14:59Z = 한국 7/1 23:59, 7/1 15:01Z = 한국 7/2 00:01.
+  const utcOut = candidateRow({ id: '1', amount: '-300000', txn_at: '2026-07-01T14:59:00Z' });
+  assert.equal(checkVoidPair(utcOut, at('2026-07-01T15:01:00Z')).error, 'differentDay');
+  // UTC 날짜는 다르지만(6/30 · 7/1) 한국 날짜는 같다(7/1 08:30 · 09:30).
+  const earlyOut = candidateRow({ id: '1', amount: '-300000', txn_at: '2026-06-30T23:30:00Z' });
+  assert.equal(checkVoidPair(earlyOut, at('2026-07-01T00:30:00Z')).ok, true);
+  // 같은 날이어도 금액이 같고 방향이 반대여야 한다.
+  assert.equal(checkVoidPair(out, at('2026-07-01T10:00:00+09:00', '300001')).error, 'amountMismatch');
+  assert.equal(checkVoidPair(out, at('2026-07-01T10:00:00+09:00', '-300000')).error, 'directionMismatch');
+  assert.equal(checkVoidPair(at('2026-07-01T10:00:00+09:00'), at('2026-07-01T11:00:00+09:00')).error, 'directionMismatch');
+  // 시각을 못 읽으면 같은 날이라고 볼 수 없다.
+  assert.equal(checkVoidPair(out, at('not a date')).error, 'differentDay');
   // 금고 이동(비상금 계좌의 `비상금`): 어느 한 쪽만 그래도 거부.
   const vault = (overrides) => candidateRow({ account_id: 3, role: 'emergency', nickname: '비상금', ...overrides });
   assert.equal(
@@ -209,11 +234,12 @@ test('checkVoidPair: 후보 찾기와 무효 처리가 함께 쓰는 판정 — 
   assert.equal(checkVoidPair(candidateRow({ id: '5', amount: '-500000', category: '고정비이체' }), plainIn).error, 'transferLeg');
   assert.equal(checkVoidPair(candidateRow({ id: '5', amount: '-500000' }), { ...plainIn, category: '비상금이체' }).error, 'transferLeg');
   // 새 코드마다 고정 문장이 있다(입력값을 싣지 않는다).
-  for (const code of ['outOfWindow', 'vaultMove', 'transferLeg']) {
+  for (const code of ['differentDay', 'vaultMove', 'transferLeg']) {
     assert.equal(typeof VOID_ERROR_MESSAGES[code], 'string', code);
     assert.doesNotMatch(VOID_ERROR_MESSAGES[code], /[0-9]{4,}/);
   }
-  assert.match(VOID_ERROR_MESSAGES.outOfWindow, new RegExp(`${VOID_WINDOW_DAYS}일`));
+  assert.match(VOID_ERROR_MESSAGES.differentDay, /같은 날/);
+  assert.equal('outOfWindow' in VOID_ERROR_MESSAGES, false);
 });
 
 test('요청 검사: id 는 양의 정수 문자열, 같은 거래 둘은 거부', () => {
@@ -286,10 +312,10 @@ test('실제 DB: 무효 처리 · 검사 · 목록 · 해제, 현금흐름표와
     await insertTransactions(client, [
       record(1, { txn_at: '2026-07-01T09:00:00+09:00', description: '급여', txn_type: '입금', amount: 3000000, balance: 3000000, category: '수입', category_source: 'rule' }),
       record(2, { txn_at: '2026-07-03T09:00:00+09:00', amount: -300000, balance: 2700000 }),
-      record(3, { txn_at: '2026-07-04T09:00:00+09:00', txn_type: '입금', amount: 300000, balance: 3000000, memo: '반환' }),
+      record(3, { txn_at: '2026-07-03T18:00:00+09:00', txn_type: '입금', amount: 300000, balance: 3000000, memo: '반환' }),
       record(4, { txn_at: '2026-07-05T09:00:00+09:00', txn_type: '입금', amount: 200000, balance: 3200000 }), // 금액 다름
       record(5, { txn_at: '2026-07-06T09:00:00+09:00', account_id: 2, txn_type: '입금', amount: 300000 }), // 다른 계좌
-      record(6, { txn_at: '2026-07-07T09:00:00+09:00', amount: -300000, balance: 2900000 }), // 같은 금액 출금 하나 더
+      record(6, { txn_at: '2026-07-03T07:00:00+09:00', amount: -300000, balance: 2900000 }), // 같은 날 같은 금액 출금 하나 더
     ]);
     const [out, inn, other, fixed, out2] = await Promise.all(
       ['test-void-2', 'test-void-3', 'test-void-4', 'test-void-5', 'test-void-6'].map((key) => idOf(client, key)),
@@ -352,9 +378,9 @@ test('실제 DB: 무효 처리 · 검사 · 목록 · 해제, 현금흐름표와
 test('동시 쓰기: 같은 입금을 두 쌍으로 동시에 무효 처리하면 하나만 된다', async (t) => {
   await withScratchDatabase(t, 'voids_race', async (client, url) => {
     await insertTransactions(client, [
-      record(1, { amount: -300000 }),
+      record(1, { amount: -300000, txn_at: '2026-07-10T08:00:00+09:00' }),
       record(2, { amount: -300000, txn_at: '2026-07-10T09:00:00+09:00' }),
-      record(3, { amount: 300000, txn_type: '입금', txn_at: '2026-07-12T09:00:00+09:00' }),
+      record(3, { amount: 300000, txn_type: '입금', txn_at: '2026-07-10T12:00:00+09:00' }),
     ]);
     const [a, b, inn] = await Promise.all(['test-void-1', 'test-void-2', 'test-void-3'].map((key) => idOf(client, key)));
     const { default: pg } = await import('pg');
@@ -370,13 +396,13 @@ test('동시 쓰기: 같은 입금을 두 쌍으로 동시에 무효 처리하�
   });
 });
 
-test('실제 DB: 직접 보낸 id 도 후보 조건으로 거부된다(창 · 금고 이동 · 이동 다리), 올바른 쌍은 그대로 된다', async (t) => {
+test('실제 DB: 직접 보낸 id 도 후보 조건으로 거부된다(다른 날 · 금고 이동 · 이동 다리), 올바른 쌍은 그대로 된다', async (t) => {
   await withScratchDatabase(t, 'voids_guard', async (client) => {
     await insertTransactions(client, [
-      // 창: 7/1 출금 ↔ 8/5 입금(35일) 거부, 7/1 출금 ↔ 8/1 같은 시각 입금(정확히 31일) 허용.
-      record(1, { txn_at: '2026-07-01T09:00:00+09:00', amount: -300000 }),
-      record(2, { txn_at: '2026-08-05T09:00:00+09:00', year_month: '2026-08', txn_type: '입금', amount: 300000 }),
-      record(3, { txn_at: '2026-08-01T09:00:00+09:00', year_month: '2026-08', txn_type: '입금', amount: 300000, dedupe_key: 'test-void-3b' }),
+      // 날짜: 7/1 23:59 출금 ↔ 7/2 00:01 입금(2분 차이지만 다음 날) 거부, 7/1 00:00 입금(같은 날) 허용.
+      record(1, { txn_at: '2026-07-01T23:59:00+09:00', amount: -300000 }),
+      record(2, { txn_at: '2026-07-02T00:01:00+09:00', txn_type: '입금', amount: 300000 }),
+      record(3, { txn_at: '2026-07-01T00:00:00+09:00', txn_type: '입금', amount: 300000, dedupe_key: 'test-void-3b' }),
       // 금고 이동: 비상금 계좌의 `비상금` 출금 ↔ 입금.
       record(4, { account_id: 3, txn_at: '2026-07-02T09:00:00+09:00', description: '비상금', amount: -100000 }),
       record(5, { account_id: 3, txn_at: '2026-07-03T09:00:00+09:00', description: '비상금', txn_type: '입금', amount: 100000 }),
@@ -388,8 +414,8 @@ test('실제 DB: 직접 보낸 id 도 후보 조건으로 거부된다(창 · �
       ['test-void-1', 'test-void-2', 'test-void-3b', 'test-void-4', 'test-void-5', 'test-void-6', 'test-void-7'].map((key) => idOf(client, key)),
     );
 
-    assert.equal((await voidPair(client, { outId: out, inId: far })).error, 'outOfWindow');
-    assert.equal((await voidPair(client, { outId: far, inId: out })).error, 'outOfWindow');
+    assert.equal((await voidPair(client, { outId: out, inId: far })).error, 'differentDay');
+    assert.equal((await voidPair(client, { outId: far, inId: out })).error, 'differentDay');
     assert.equal((await voidPair(client, { outId: vaultOut, inId: vaultIn })).error, 'vaultMove');
     assert.equal((await voidPair(client, { outId: moveOut, inId: moveIn })).error, 'transferLeg');
     assert.equal((await client.query('SELECT count(*)::int AS n FROM voided_pairs')).rows[0].n, 0);
@@ -410,7 +436,7 @@ test('실제 DB: 직접 보낸 id 도 후보 조건으로 거부된다(창 · �
         deps,
       );
     for (const [body, code] of [
-      [{ action: 'void', outId: out, inId: far }, 'outOfWindow'],
+      [{ action: 'void', outId: out, inId: far }, 'differentDay'],
       [{ action: 'void', outId: vaultOut, inId: vaultIn }, 'vaultMove'],
       [{ action: 'void', outId: moveOut, inId: moveIn }, 'transferLeg'],
     ]) {
@@ -420,7 +446,7 @@ test('실제 DB: 직접 보낸 id 도 후보 조건으로 거부된다(창 · �
       assert.deepEqual(await response.json(), { ok: false, message: VOID_ERROR_MESSAGES[code] }, code);
     }
 
-    // 후보 목록에 없는 쌍은 거부되고, 있는 쌍(정확히 31일)은 그대로 된다.
+    // 후보 목록에 없는 쌍은 거부되고, 있는 쌍(같은 날)은 그대로 된다.
     const listed = await listVoidCandidates(client, '2026-07');
     assert.deepEqual(listed.map((c) => [c.out.id, c.in.id]), [[out, near]]);
     const made = await voidPair(client, { outId: near, inId: out });
@@ -429,27 +455,26 @@ test('실제 DB: 직접 보낸 id 도 후보 조건으로 거부된다(창 · �
   });
 });
 
-test('실제 DB: 짧은 2월을 낀 31일 안의 쌍(1/31 -> 3/2)도 양쪽 달 목록에 나오고, 2월에는 안 나온다', async (t) => {
-  await withScratchDatabase(t, 'voids_february', async (client) => {
+test('실제 DB: 같은 날은 한국 시각 기준 — UTC 날짜가 달라도 한국 날짜가 같으면 후보, 그 반대는 아니다', async (t) => {
+  await withScratchDatabase(t, 'voids_seoul_day', async (client) => {
     await insertTransactions(client, [
-      // 2027 년은 윤년이 아니다 — 1/31 -> 3/2 는 30일(창 안)이지만 달로는 두 칸 떨어져 있다.
-      record(1, { txn_at: '2027-01-31T09:00:00+09:00', year_month: '2027-01', amount: -300000 }),
-      record(2, { txn_at: '2027-03-02T09:00:00+09:00', year_month: '2027-03', txn_type: '입금', amount: 300000 }),
-      // 창 밖(1/31 -> 3/5, 33일)은 넓힌 읽기에도 나오지 않는다.
-      record(3, { txn_at: '2027-01-31T10:00:00+09:00', year_month: '2027-01', amount: -700000 }),
-      record(4, { txn_at: '2027-03-05T10:00:00+09:00', year_month: '2027-03', txn_type: '입금', amount: 700000 }),
+      // 한국 8/1 08:30 · 09:30 = UTC 7/31 23:30 · 8/1 00:30. 한국 날짜가 같다 -> 후보(8월).
+      record(1, { txn_at: '2026-07-31T23:30:00Z', year_month: '2026-08', amount: -300000 }),
+      record(2, { txn_at: '2026-08-01T00:30:00Z', year_month: '2026-08', txn_type: '입금', amount: 300000 }),
+      // 한국 7/31 23:59 · 8/1 00:01 = UTC 7/31 14:59 · 15:01. UTC 날짜는 같지만 한국 날짜가 다르다 -> 어느 달에도 후보 아님.
+      record(3, { txn_at: '2026-07-31T14:59:00Z', year_month: '2026-07', amount: -700000 }),
+      record(4, { txn_at: '2026-07-31T15:01:00Z', year_month: '2026-08', txn_type: '입금', amount: 700000 }),
     ]);
-    const [out, inn] = await Promise.all(['test-void-1', 'test-void-2'].map((key) => idOf(client, key)));
+    const [out, inn, lateOut, earlyIn] = await Promise.all(
+      ['test-void-1', 'test-void-2', 'test-void-3', 'test-void-4'].map((key) => idOf(client, key)),
+    );
 
-    for (const month of ['2027-01', '2027-03']) {
-      const listed = await listVoidCandidates(client, month);
-      assert.deepEqual(listed.map((c) => [c.out.id, c.in.id]), [[out, inn]], month);
-    }
-    // 한쪽이 이 달인 쌍만 보인다 — 2월에는 두 다리 모두 없다.
-    assert.deepEqual(await listVoidCandidates(client, '2027-02'), []);
+    assert.deepEqual((await listVoidCandidates(client, '2026-08')).map((c) => [c.out.id, c.in.id]), [[out, inn]]);
+    assert.deepEqual(await listVoidCandidates(client, '2026-07'), []);
+    assert.equal((await voidPair(client, { outId: lateOut, inId: earlyIn })).error, 'differentDay');
     // 목록에 나온 쌍은 voidPair 도 받아들인다(같은 판정).
     assert.equal((await voidPair(client, { outId: out, inId: inn })).ok, true);
-    assert.deepEqual(await listVoidCandidates(client, '2027-01'), []);
+    assert.deepEqual(await listVoidCandidates(client, '2026-08'), []);
   });
 });
 
@@ -471,9 +496,9 @@ test('성질: voidPair 가 받아들이는 쌍은 모두 findVoidCandidates 가 
     const pick = (list) => list[Math.floor(random() * list.length)];
     const records = [];
     for (let n = 1; n <= 22; n += 1) {
-      // 6/10 ~ 8/28 사이(한국 시각). 달을 걸치고 창(31일)을 넘는 쌍이 생기게 넓게 흩뿌린다.
-      const day = Math.floor(random() * 80);
-      const at = new Date(Date.UTC(2026, 5, 10, 0, 0, 0) + day * 86400000 + Math.floor(random() * 86400) * 1000);
+      // 한국 시각 6/29 ~ 7/2 사이 나흘. 같은 날 쌍과 다른 날(달 경계 포함) 쌍이 모두 생기게 좁게 뿌린다.
+      const day = Math.floor(random() * 4);
+      const at = new Date(Date.UTC(2026, 5, 28, 15, 0, 0) + day * 86400000 + Math.floor(random() * 86400) * 1000);
       const seoul = new Date(at.getTime() + 9 * 3600000);
       const yearMonth = `${seoul.getUTCFullYear()}-${String(seoul.getUTCMonth() + 1).padStart(2, '0')}`;
       const transfer = random() < 0.15;
@@ -514,7 +539,7 @@ test('성질: voidPair 가 받아들이는 쌍은 모두 findVoidCandidates 가 
       }
     }
     // 씨앗이 모든 갈래를 실제로 건드렸는지(성질이 헛돌지 않았는지).
-    for (const code of ['ok', 'outOfWindow', 'vaultMove', 'transferLeg', 'accountMismatch', 'directionMismatch', 'amountMismatch']) {
+    for (const code of ['ok', 'differentDay', 'vaultMove', 'transferLeg', 'accountMismatch', 'directionMismatch', 'amountMismatch']) {
       assert.ok((seen.get(code) ?? 0) > 0, code);
     }
   });

@@ -29,7 +29,7 @@ export type VoidCandidate = {
   in: VoidLeg;
   similar: boolean;
   outFirst: boolean;
-  gapDays: number;
+  gapMinutes: number;
 };
 
 const FLOW = new Intl.NumberFormat("ko-KR", { signDisplay: "exceptZero" });
@@ -140,7 +140,7 @@ export function VoidPanel({
       ) : null}
 
       <h3 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-        {yearMonth} 후보 — 같은 계좌에서 금액이 같고 방향이 반대인 두 거래(31일 안)
+        {yearMonth} 후보 — 같은 날(한국 시각) 같은 계좌에서 금액이 같고 방향이 반대인 두 거래
       </h3>
       {candidates.length === 0 ? (
         <p className="text-xs text-zinc-500">후보가 없습니다.</p>
@@ -158,7 +158,7 @@ export function VoidPanel({
                   <span className="mr-2 text-xs text-zinc-500">
                     {candidate.account.nickname}
                     {candidate.similar ? " · 적요/메모 같음" : ""}
-                    {candidate.outFirst ? "" : " · 입금이 먼저"} · {candidate.gapDays}일 차이
+                    {candidate.outFirst ? "" : " · 입금이 먼저"} · {candidate.gapMinutes}분 차이
                   </span>
                   <Leg leg={candidate.out} />
                   <Leg leg={candidate.in} />
