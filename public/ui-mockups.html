@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>가계부 UI 스타일 시안 5종</title>
+<style>
+/* Layout: page chrome is a quiet index; each option is a self-contained screen mock with its own scoped tokens */
+:root{--bg:#f3f4f6;--fg:#1c1f24;--mut:#6a7079;--line:#dfe2e6;--card:#fff;--link:#2f5fd0;
+--sans:system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif;
+--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#15171b;--fg:#e8eaee;--mut:#9aa0a9;--line:#2b2f36;--card:#1d2026;--link:#8fb0ff;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#15171b;--fg:#e8eaee;--mut:#9aa0a9;--line:#2b2f36;--card:#1d2026;--link:#8fb0ff;color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans)}
+.page{max-width:1080px;margin:0 auto;padding-inline:16px;padding-block:28px 64px;display:grid;gap:36px}
+.head h1{font-size:1.6rem;margin:0 0 6px;text-wrap:balance}
+.head p{margin:0;color:var(--mut);font-size:.9rem;line-height:1.5}
+.toc{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.toc a{color:var(--link);text-decoration:none;border:1px solid var(--line);background:var(--card);border-radius:999px;padding:5px 12px;font-size:.85rem}
+.toc a:focus-visible,a:focus-visible{outline:2px solid var(--link);outline-offset:2px}
+.opt{display:grid;gap:10px;scroll-margin-top:12px}
+.opt>h2{font-size:1.1rem;margin:0;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.opt>h2 small{font-weight:400;color:var(--mut);font-size:.8rem}
+.cap{margin:0;font-size:.85rem;color:var(--mut);line-height:1.5}
+.cap b{color:var(--fg);font-weight:600}
+.frame{border-radius:12px;overflow:hidden;border:1px solid var(--line);min-width:0}
+.num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;width:100%}
+.memo{display:block;font-size:.78em;opacity:.6;margin-top:2px}
+.nav{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.82rem}
+.nav a{text-decoration:none;color:inherit;opacity:.65}
+.nav a[aria-current]{opacity:1;font-weight:600}
+.bar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px}
+.brand{font-weight:700}
+svg text{font-family:var(--sans)}
+
+/* 1 Toss */
+.s1{--b:#f2f4f6;--c:#fff;--t:#191f28;--m:#8b95a1;--a:#3182f6;--neg:#f04452;background:var(--b);color:var(--t);padding:20px}
+.s1 .nav a[aria-current]{color:var(--a)}
+.s1 .body{display:grid;gap:14px;margin-top:18px}
+.s1 .hero{background:var(--c);border-radius:24px;padding:26px}
+.s1 .hero .l{color:var(--m);font-size:.9rem}
+.s1 .hero .v{font-size:clamp(2rem,6vw,2.6rem);font-weight:700;margin:6px 0 16px;font-variant-numeric:tabular-nums;color:var(--a)}
+.s1 .chips{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
+.s1 .chip{background:var(--b);border-radius:14px;padding:12px 14px}
+.s1 .chip span{display:block;color:var(--m);font-size:.8rem}
+.s1 .chip b{font-size:1.05rem;white-space:nowrap;font-variant-numeric:tabular-nums}
+.s1 .two{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:14px}
+.s1 .card{background:var(--c);border-radius:24px;padding:20px 22px;min-width:0}
+.s1 h3{margin:0 0 10px;font-size:1rem}
+.s1 td{padding:11px 0;font-size:.95rem}
+.s1 td.k{color:var(--m);font-size:.82rem;width:64px}
+.s1 .neg{color:var(--neg)}.s1 .pos{color:var(--a)}
+.s1 tr.tot td{border-top:1px solid var(--b);font-weight:700;padding-top:14px}
+
+/* 2 Linear/Vercel */
+.s2{--b:#fff;--t:#0f1011;--m:#6b6f76;--l:#e6e7ea;--sub:#fafafa;--neg:#c2410c;--pos:#0f7b3f;background:var(--b);color:var(--t);font-size:13px}
+.s2 .bar{padding:10px 16px;border-bottom:1px solid var(--l)}
+.s2 .nav{font-size:12.5px}
+.s2 .nav a[aria-current]{background:var(--sub);border:1px solid var(--l);border-radius:6px;padding:2px 8px;margin:-3px 0}
+.s2 .body{padding:16px;display:grid;gap:16px}
+.s2 .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--l);border-radius:8px}
+.s2 .kpi{padding:12px 14px;border-left:1px solid var(--l)}
+.s2 .kpi:first-child{border-left:0}
+.s2 .kpi span{color:var(--m);font-size:11.5px}
+.s2 .kpi b{display:block;font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;margin-top:4px}
+.s2 .two{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px}
+.s2 .box{border:1px solid var(--l);border-radius:8px;min-width:0}
+.s2 .box h3{margin:0;font-size:12px;font-weight:500;color:var(--m);padding:8px 12px;border-bottom:1px solid var(--l);background:var(--sub)}
+.s2 td,.s2 th{padding:6px 12px;border-bottom:1px solid var(--l);text-align:left}
+.s2 th{font-weight:500;color:var(--m);font-size:11.5px}
+.s2 td.k{color:var(--m)}
+.s2 .num{font-family:var(--mono);font-size:12.5px;text-align:right}
+.s2 .neg{color:var(--neg)}.s2 .pos{color:var(--pos)}
+.s2 tr.tot td{font-weight:600;border-bottom:0}
+.s2 .ch{padding:10px 12px}
+
+/* 3 Bento */
+.s3{--b:#eef0ec;--c:#fff;--t:#1d2320;--m:#707a73;--a:#2f7d5b;--hi:#dcefe4;--neg:#c23b3b;background:var(--b);color:var(--t);padding:16px}
+.s3 .nav a[aria-current]{color:var(--a)}
+.s3 .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:14px}
+.s3 .t{background:var(--c);border-radius:18px;padding:16px;min-width:0}
+.s3 .t .l{color:var(--m);font-size:.8rem}
+.s3 .t .v{font-size:1.35rem;font-weight:700;font-variant-numeric:tabular-nums;margin-top:6px}
+.s3 .big{grid-column:span 2;grid-row:span 2;background:var(--a);color:#fff}
+.s3 .big .l{color:#d6ebe0}.s3 .big .v{font-size:2.4rem}
+.s3 .big p{margin:10px 0 0;font-size:.85rem;color:#d6ebe0}
+.s3 .wide{grid-column:span 2}
+.s3 .tall{grid-column:span 2;grid-row:span 2}
+.s3 h3{margin:0 0 8px;font-size:.9rem}
+.s3 td{padding:7px 0;font-size:.88rem;border-bottom:1px solid var(--b)}
+.s3 td.k{color:var(--m);font-size:.78rem}
+.s3 tr.tot td{border-bottom:0;font-weight:700}
+.s3 .neg{color:var(--neg)}.s3 .pos{color:var(--a)}
+.s3 .top{display:grid;gap:8px}
+.s3 .top div{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;font-size:.85rem}
+.s3 .top i{display:block;height:6px;border-radius:3px;background:var(--hi)}
+.s3 .top i s{display:block;height:100%;border-radius:3px;background:var(--a)}
+
+/* 4 Sidebar + palette */
+.s4{--b:#fff;--side:#f7f7f5;--t:#37352f;--m:#8a877f;--l:#e9e8e4;--a:#2e6fdb;--sel:#ebeae6;--neg:#d44c47;--pos:#2e6fdb;background:var(--b);color:var(--t);display:grid;grid-template-columns:200px minmax(0,1fr)}
+.s4 aside{background:var(--side);border-right:1px solid var(--l);padding:14px 10px;display:grid;gap:12px;align-content:start}
+.s4 aside .k{display:flex;justify-content:space-between;align-items:center;border:1px solid var(--l);background:var(--b);border-radius:8px;padding:6px 10px;color:var(--m);font-size:.82rem}
+.s4 kbd{font-family:var(--sans);font-size:.72rem;border:1px solid var(--l);border-radius:4px;padding:1px 5px;background:var(--side)}
+.s4 .nav{flex-direction:column;gap:2px;font-size:.88rem}
+.s4 .nav a{opacity:1;padding:6px 8px;border-radius:6px;color:var(--t)}
+.s4 .nav a[aria-current]{background:var(--sel)}
+.s4 .sec{font-size:.7rem;letter-spacing:.06em;color:var(--m);padding:0 8px}
+.s4 main{padding:22px 26px;display:grid;gap:18px;min-width:0}
+.s4 .crumb{font-size:.8rem;color:var(--m)}
+.s4 h3{font-size:1.5rem;margin:2px 0 0}
+.s4 .props{display:flex;flex-wrap:wrap;gap:8px 24px;font-size:.88rem}
+.s4 .props span{color:var(--m);margin-right:6px}
+.s4 .props b{font-variant-numeric:tabular-nums;font-weight:600}
+.s4 .two{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:22px}
+.s4 td,.s4 th{padding:7px 8px;border-bottom:1px solid var(--l);text-align:left;font-size:.88rem}
+.s4 th{font-weight:500;color:var(--m);font-size:.78rem}
+.s4 td.k{color:var(--m)}
+.s4 .neg{color:var(--neg)}.s4 .pos{color:var(--pos)}
+.s4 tr.tot td{font-weight:600}
+.s4 h4{margin:0 0 8px;font-size:.85rem;color:var(--m);font-weight:500}
+
+/* 5 Dark + glow */
+.s5{--b:#0e0f13;--c:#16171d;--t:#ecedf2;--m:#8d90a0;--l:#262833;--a:#8b7bff;--neg:#ff7a85;--pos:#7ee0b0;
+background:radial-gradient(600px 260px at 85% -40px,#8b7bff33,transparent 70%),radial-gradient(500px 240px at 0% 110%,#3aa0ff1f,transparent 70%),var(--b);color:var(--t);padding:18px;color-scheme:dark}
+.s5 .nav a[aria-current]{color:var(--a)}
+.s5 .body{display:grid;gap:12px;margin-top:16px}
+.s5 .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.s5 .p{background:linear-gradient(180deg,#ffffff0a,#ffffff03);border:1px solid var(--l);border-radius:14px;padding:14px;min-width:0}
+.s5 .kpi span{color:var(--m);font-size:.78rem}
+.s5 .kpi b{display:block;font-size:1.25rem;font-weight:600;font-variant-numeric:tabular-nums;margin-top:6px}
+.s5 .kpi.hl{border-color:#8b7bff66;box-shadow:0 0 0 1px #8b7bff33,0 8px 30px -10px #8b7bff88}
+.s5 .kpi.hl b{color:var(--a)}
+.s5 .two{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:12px}
+.s5 h3{margin:0 0 8px;font-size:.85rem;color:var(--m);font-weight:500}
+.s5 td{padding:8px 4px;border-bottom:1px solid var(--l);font-size:.9rem}
+.s5 td.k{color:var(--m);font-size:.8rem}
+.s5 .memo{color:var(--m);opacity:1}
+.s5 .neg{color:var(--neg)}.s5 .pos{color:var(--pos)}
+.s5 tr.tot td{border-bottom:0;font-weight:600}
+
+@media (max-width:760px){
+ .s1 .two,.s2 .two,.s4 .two,.s5 .two{grid-template-columns:minmax(0,1fr)}
+ .s2 .kpis,.s5 .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .s2 .kpi:nth-child(3){border-left:0}.s2 .kpi:nth-child(n+3){border-top:1px solid var(--l)}
+ .s3 .grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .s3 .big,.s3 .wide,.s3 .tall{grid-column:span 2;grid-row:auto}
+ .s4{grid-template-columns:minmax(0,1fr)}
+ .s4 aside{border-right:0;border-bottom:1px solid var(--l)}
+ .s4 .nav{flex-direction:row;flex-wrap:wrap}
+ .s4 main{padding:18px 16px}
+ .s1{padding:14px}.s1 .hero{padding:20px}
+}
+</style>
+
+<div class="page">
+ <header class="head">
+  <h1>가계부 UI 스타일 시안 5종</h1>
+  <p>같은 화면(2026년 9월 월별 현금흐름)을 다섯 가지 스타일로 그렸습니다. 모든 금액과 항목은 비교용으로 지어낸 예시 데이터입니다.</p>
+  <nav class="toc" aria-label="시안 목록">
+   <a href="#toss">1 토스 스타일</a><a href="#minimal">2 미니멀 SaaS</a><a href="#bento">3 벤토 그리드</a><a href="#sidebar">4 사이드바 + ⌘K</a><a href="#dark">5 다크 그라데이션</a>
+  </nav>
+ </header>
+ <div id="out"></div>
+</div>
+
+<script>
+const PAGES=["홈","거래내역 올리기","월별 현금흐름","분류 정리","통계"];
+const K={inc:3400000,exp:2987000,sav:1055000,net:413000};
+const CAT=[["주거비",420000],["고정비",300000],["카드비",912000],["변동비",300000]];
+const ROWS=[["수입","급여","",3400000],["저축","적금","",-1055000],["주거비","월세","",-420000],["고정비","통신비","",-300000],["카드비","신한카드","",-512000],["카드비","KB국민카드","",-400000],["변동비","일회성 지출","길동 IRP",-300000]];
+const TREND=[["4월",2710000],["5월",3120000],["6월",2880000],["7월",3350000],["8월",2940000],["9월",2987000]];
+const f=n=>Math.abs(n).toLocaleString("ko-KR");
+const sg=n=>(n<0?"−":n>0?"+":"")+f(n);
+const cls=n=>n<0?"neg":"pos";
+const won=n=>f(n)+"원";
+
+function nav(){return `<nav class="nav" aria-label="앱 메뉴">${PAGES.map(p=>`<a href="#"${p==="월별 현금흐름"?' aria-current="page"':""}>${p}</a>`).join("")}</nav>`}
+function topbar(brand){return `<div class="bar"><span class="brand">${brand}</span>${nav()}</div>`}
+function table(head){
+ return `<div class="tw"><table>${head?`<thead><tr><th>분류</th><th>항목</th><th class="num">금액(원)</th></tr></thead>`:""}<tbody>`+
+ ROWS.map(r=>`<tr><td class="k">${r[0]}</td><td>${r[1]}${r[2]?`<span class="memo">${r[2]}</span>`:""}</td><td class="num ${cls(r[3])}">${sg(r[3])}</td></tr>`).join("")+
+ `<tr class="tot"><td class="k">합계</td><td>순증감</td><td class="num pos">${sg(K.net)}</td></tr></tbody></table></div>`}
+function chart(o){
+ const W=300,H=130,bw=30,gap=(W-40-6*bw)/5,max=3500000,ph=86,base=100;
+ let s=`<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="최근 6개월 지출 추이, 9월 2,987,000원" style="max-width:100%;display:block">`;
+ [0,1750000,3500000].forEach(v=>{const y=base-v/max*ph;s+=`<line x1="34" x2="${W}" y1="${y}" y2="${y}" stroke="${o.grid}" stroke-width="1"/><text x="30" y="${y+3}" font-size="9" text-anchor="end" fill="${o.mut}">${v?v/10000+"만":"0"}</text>`});
+ TREND.forEach((d,i)=>{const x=40+i*(bw+gap),h=d[1]/max*ph,last=i===5;
+  s+=`<rect x="${x}" y="${base-h}" width="${bw}" height="${h}" rx="${o.rx}" fill="${last?o.hi:o.bar}"/><text x="${x+bw/2}" y="${base+14}" font-size="10" text-anchor="middle" fill="${o.mut}">${d[0]}</text>`;
+  if(last)s+=`<text x="${x+bw/2}" y="${base-h-5}" font-size="10" font-weight="600" text-anchor="middle" fill="${o.hi}">299만</text>`});
+ return s+`<text x="34" y="${H-2}" font-size="9" fill="${o.mut}">지출 · 최근 6개월</text></svg>`}
+
+const S=[];
+S.push(["toss","1. 토스 스타일","한국 핀테크형",
+`<div class="frame s1">${topbar("가계부")}<div class="body">
+ <div class="hero"><div class="l">9월에 남은 돈</div><div class="v">+${won(K.net)}</div>
+ <div class="chips"><div class="chip"><span>수입</span><b>${won(K.inc)}</b></div><div class="chip"><span>지출</span><b>${won(K.exp)}</b></div><div class="chip"><span>저축</span><b>${won(K.sav)}</b></div></div></div>
+ <div class="two"><div class="card"><h3>9월 현금흐름</h3>${table(false)}</div>
+ <div class="card"><h3>지출 추이</h3>${chart({bar:"#e5e8eb",hi:"#3182f6",grid:"#f2f4f6",mut:"#8b95a1",rx:8})}</div></div></div></div>`,
+"<b>장점</b> 숫자가 한눈에 들어오고 모바일에서 가장 친숙합니다. <b>단점</b> 여백이 커서 한 화면에 담기는 행 수가 적습니다."]);
+
+S.push(["minimal","2. Linear/Vercel 미니멀 SaaS","",
+`<div class="frame s2">${topbar("budget")}<div class="body">
+ <div class="kpis"><div class="kpi"><span>수입</span><b>${f(K.inc)}</b></div><div class="kpi"><span>지출</span><b>${f(K.exp)}</b></div><div class="kpi"><span>저축</span><b>${f(K.sav)}</b></div><div class="kpi"><span>순증감</span><b style="color:var(--pos)">${sg(K.net)}</b></div></div>
+ <div class="two"><div class="box"><h3>2026-09 현금흐름</h3>${table(true)}</div>
+ <div class="box"><h3>지출 추이</h3><div class="ch">${chart({bar:"#d4d6da",hi:"#0f1011",grid:"#f0f1f3",mut:"#6b6f76",rx:2})}</div></div></div></div></div>`,
+"<b>장점</b> 정보 밀도가 높고 숫자 비교가 정확합니다. <b>단점</b> 차갑고 사무적이라 가계부다운 친근함은 약합니다."]);
+
+const maxc=Math.max(...CAT.map(c=>c[1]));
+S.push(["bento","3. 벤토 그리드 대시보드","",
+`<div class="frame s3">${topbar("우리집 가계부")}<div class="grid">
+ <div class="t big"><div class="l">9월 순증감</div><div class="v">+${won(K.net)}</div><p>수입 ${won(K.inc)} 중 12%가 남았습니다.</p></div>
+ <div class="t"><div class="l">수입</div><div class="v">${f(K.inc)}</div></div>
+ <div class="t"><div class="l">저축</div><div class="v">${f(K.sav)}</div></div>
+ <div class="t wide"><div class="l">지출 합계</div><div class="v">${f(K.exp)}</div></div>
+ <div class="t tall"><h3>현금흐름</h3>${table(false)}</div>
+ <div class="t wide"><h3>지출 추이</h3>${chart({bar:"#dcefe4",hi:"#2f7d5b",grid:"#eef0ec",mut:"#707a73",rx:6})}</div>
+ <div class="t wide"><h3>지출 상위 분류</h3><div class="top">${CAT.slice().sort((a,b)=>b[1]-a[1]).map(c=>`<div><span>${c[0]}</span><i><s style="width:${c[1]/maxc*100}%"></s></i><span class="num">${f(c[1])}</span></div>`).join("")}</div></div>
+</div></div>`,
+"<b>장점</b> KPI·차트·상위 항목을 한 화면에 요약해 대시보드 첫 화면에 좋습니다. <b>단점</b> 타일이 늘어나면 우선순위가 흐려지고 모바일에서 길어집니다."]);
+
+S.push(["sidebar","4. 사이드바 + 명령 팔레트","Notion/Linear형",
+`<div class="frame s4"><aside><div class="brand">가계부</div><div class="k">⌘K 검색 <kbd>⌘K</kbd></div><div class="sec">메뉴</div>${nav()}</aside>
+ <main><div><div class="crumb">월별 현금흐름 / 2026-09</div><h3>2026년 9월</h3></div>
+ <div class="props"><div><span>수입</span><b>${f(K.inc)}</b></div><div><span>지출</span><b>${f(K.exp)}</b></div><div><span>저축</span><b>${f(K.sav)}</b></div><div><span>순증감</span><b class="pos">${sg(K.net)}</b></div></div>
+ <div class="two"><div style="min-width:0">${table(true)}</div><div><h4>지출 추이</h4>${chart({bar:"#e3e2de",hi:"#2e6fdb",grid:"#f1f0ed",mut:"#8a877f",rx:3})}</div></div></main></div>`,
+"<b>장점</b> 메뉴가 늘어도 구조가 버티고 ⌘K로 빠르게 이동합니다. <b>단점</b> 좁은 화면에선 사이드바가 위로 접혀 장점이 줄어듭니다."]);
+
+S.push(["dark","5. 다크 모드 + 은은한 그라데이션","Raycast/Arc형",
+`<div class="frame s5">${topbar("Ledger")}<div class="body">
+ <div class="kpis"><div class="p kpi"><span>수입</span><b>${f(K.inc)}</b></div><div class="p kpi"><span>지출</span><b>${f(K.exp)}</b></div><div class="p kpi"><span>저축</span><b>${f(K.sav)}</b></div><div class="p kpi hl"><span>순증감</span><b>${sg(K.net)}</b></div></div>
+ <div class="two"><div class="p"><h3>2026-09 현금흐름</h3>${table(false)}</div>
+ <div class="p"><h3>지출 추이</h3>${chart({bar:"#2c2e3a",hi:"#8b7bff",grid:"#1f2029",mut:"#8d90a0",rx:5})}</div></div></div></div>`,
+"<b>장점</b> 세련되고 밤에 보기 편하며 강조색 하나가 또렷합니다. <b>단점</b> 빨강/초록 대비가 약해지기 쉬워 금액 색 관리가 까다롭습니다."]);
+
+document.getElementById("out").outerHTML=S.map(s=>`<section class="opt" id="${s[0]}"><h2>${s[1]}${s[2]?` <small>${s[2]}</small>`:""}</h2><p class="cap">${s[4]}</p>${s[3]}</section>`).join("");
+</script>
