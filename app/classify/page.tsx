@@ -62,17 +62,7 @@ const PLAIN_LINK =
 function Shell({ children }: { children: React.ReactNode }) {
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 p-8">
-      <div className="flex items-baseline justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">분류 정리</h1>
-        <div className="flex gap-4">
-          <Link href="/report" className={PLAIN_LINK}>
-            현금흐름표
-          </Link>
-          <Link href="/" className={PLAIN_LINK}>
-            홈
-          </Link>
-        </div>
-      </div>
+      <h1 className="text-2xl font-semibold tracking-tight">분류 정리</h1>
       {children}
     </main>
   );

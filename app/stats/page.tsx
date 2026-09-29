@@ -34,9 +34,6 @@ import { TrendChart, won } from "./trend-chart";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const PLAIN_LINK =
-  "text-sm text-zinc-600 underline underline-offset-4 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100";
-
 type SeriesKey = "수입" | "저축" | "주거비" | "고정비" | "카드비" | "변동비";
 type TrendPoint = { yearMonth: string; hasData: boolean; count: number } & Record<SeriesKey, number | null>;
 
@@ -60,20 +57,7 @@ const NOTE: Record<SeriesKey, string> = {
 function Shell({ children }: { children: React.ReactNode }) {
   return (
     <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 p-8">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h1 className="text-2xl font-semibold tracking-tight">가계부 통계</h1>
-        <div className="flex gap-4">
-          <Link href="/report" className={PLAIN_LINK}>
-            현금흐름표
-          </Link>
-          <Link href="/classify" className={PLAIN_LINK}>
-            분류 정리
-          </Link>
-          <Link href="/" className={PLAIN_LINK}>
-            홈
-          </Link>
-        </div>
-      </div>
+      <h1 className="text-2xl font-semibold tracking-tight">가계부 통계</h1>
       {children}
     </main>
   );
