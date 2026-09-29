@@ -34,14 +34,14 @@ export type VoidCandidate = {
 
 const FLOW = new Intl.NumberFormat("ko-KR", { signDisplay: "exceptZero" });
 const BUTTON =
-  "rounded-md border border-zinc-300 px-2 py-0.5 text-xs hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900";
+  "h-7 shrink-0 rounded-md border border-line-strong bg-canvas px-2 text-xs font-medium hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50";
 
 function Leg({ leg, struck = false }: { leg: VoidLeg; struck?: boolean }) {
   return (
-    <span className={`block ${struck ? "text-zinc-400 line-through dark:text-zinc-500" : ""}`}>
-      <span className="tabular-nums text-zinc-500">{leg.at}</span> {leg.description || "(적요 없음)"}{" "}
+    <span className={`block ${struck ? "text-faint line-through" : ""}`}>
+      <span className="tabular-nums text-muted">{leg.at}</span> {leg.description || "(적요 없음)"}{" "}
       <span className="tabular-nums">{FLOW.format(leg.amount)}원</span>
-      {leg.memo !== null ? <span className="block text-xs text-zinc-400 no-underline">메모: {leg.memo}</span> : null}
+      {leg.memo !== null ? <span className="block text-xs text-faint no-underline">메모: {leg.memo}</span> : null}
     </span>
   );
 }
@@ -96,10 +96,10 @@ export function VoidPanel({
 
   return (
     <section className="flex flex-col gap-3" data-testid="void-panel" aria-labelledby="void-title">
-      <h2 id="void-title" className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+      <h2 id="void-title" className="text-[13px] font-semibold text-fg">
         무효 처리(상쇄)
       </h2>
-      <p className="text-xs text-zinc-500">
+      <p className="text-xs text-muted">
         출금됐다가 거부 · 반환되어 같은 금액이 다시 들어온 경우처럼, 두 거래를 <strong>없던 일</strong>로 볼 수
         있습니다. 무효로 표시한 두 거래는 수입 · 지출 · 미분류 · 통계에서 빠지고 여기에만 남습니다(언제든 해제).
         같은 계좌 · 같은 금액 · 반대 방향의 거래만 짝지을 수 있고, 저절로 무효가 되는 거래는 없습니다.
@@ -107,7 +107,7 @@ export function VoidPanel({
       {message !== null ? (
         <p
           role={message.kind === "error" ? "alert" : "status"}
-          className={`text-xs ${message.kind === "error" ? "text-red-600" : "text-emerald-700 dark:text-emerald-400"}`}
+          className={`text-xs ${message.kind === "error" ? "text-danger" : "text-ok"}`}
         >
           {message.text}
         </p>
@@ -119,10 +119,10 @@ export function VoidPanel({
             <li
               key={pair.pairId}
               data-testid="voided-pair"
-              className="flex flex-wrap items-start justify-between gap-2 rounded-md border border-dashed border-zinc-300 p-2 text-sm dark:border-zinc-700"
+              className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-dashed border-line-strong p-2.5 text-[13px]"
             >
               <div className="min-w-0 flex-1">
-                <span className="mr-2 text-xs text-zinc-500">{pair.account.nickname} · 무효</span>
+                <span className="mr-2 text-xs text-muted">{pair.account.nickname} · 무효</span>
                 <Leg leg={pair.out} struck />
                 <Leg leg={pair.in} struck />
               </div>
@@ -139,11 +139,11 @@ export function VoidPanel({
         </ul>
       ) : null}
 
-      <h3 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
+      <h3 className="text-xs font-medium text-muted">
         {yearMonth} 후보 — 같은 날(한국 시각) 같은 계좌에서 금액이 같고 방향이 반대인 두 거래
       </h3>
       {candidates.length === 0 ? (
-        <p className="text-xs text-zinc-500">후보가 없습니다.</p>
+        <p className="text-xs text-muted">후보가 없습니다.</p>
       ) : (
         <ul className="flex flex-col gap-2" data-testid="void-candidates">
           {candidates.map((candidate) => {
@@ -152,10 +152,10 @@ export function VoidPanel({
               <li
                 key={id}
                 data-testid="void-candidate"
-                className="flex flex-wrap items-start justify-between gap-2 rounded-md border border-zinc-300 p-2 text-sm dark:border-zinc-700"
+                className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-line p-2.5 text-[13px]"
               >
                 <div className="min-w-0 flex-1">
-                  <span className="mr-2 text-xs text-zinc-500">
+                  <span className="mr-2 text-xs text-muted">
                     {candidate.account.nickname}
                     {candidate.similar ? " · 적요/메모 같음" : ""}
                     {candidate.outFirst ? "" : " · 입금이 먼저"} · {candidate.gapMinutes}분 차이

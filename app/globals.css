@@ -1,24 +1,164 @@
 @import "tailwindcss";
 
+/*
+ * 디자인 토큰 (2026-09, 사용자가 고른 시안 2 "Linear/Vercel 미니멀 SaaS").
+ *
+ * 무채색 회색 + 1px 선 + 작은 글자 + 절제된 강조색 하나. 음수 금액만 다른 색이다.
+ * 라이트/다크는 prefers-color-scheme 로 고른다 — 다크는 뒤집기가 아니라 같은 역할의
+ * 값을 따로 정했다. 글자 색은 모두 해당 배경(canvas · subtle) 위에서 WCAG AA(4.5:1)
+ * 이상, 선 · 차트 막대는 3:1 기준으로 골랐다.
+ *
+ * 컴포넌트는 raw 색(zinc-500 등) 대신 아래 역할 이름(text-muted, border-line …)을 쓴다.
+ * 색을 바꿀 때는 이 파일만 고친다.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+  color-scheme: light;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --canvas: #ffffff; /* 페이지 · 카드 바탕 */
+  --subtle: #f7f7f8; /* 표 머리 · 합계 줄 · 보조 패널 */
+  --hover: #f0f0f2; /* 버튼 · 줄 hover */
+  --line: #e6e7ea; /* 1px 구분선 */
+  --line-strong: #d0d2d7; /* 버튼 · 카드 테두리 */
+  --control: #848890; /* 입력칸 테두리 — 배경 대비 3:1 (WCAG 1.4.11) */
+
+  --fg: #111214; /* 본문 */
+  --soft: #3b3e44; /* 소제목 · 보조 본문 */
+  --muted: #5f636b; /* 라벨 · 설명 */
+  --faint: #686c74; /* 메모 같은 가장 흐린 글자 (그래도 AA) */
+
+  --accent: #3e63dd; /* 강조색 하나: 링크 · 초점 · 현재 페이지 · 차트 */
+  --accent-text: #3358d4;
+  --accent-bg: #eef2fd;
+  --chart: #3e63dd;
+
+  --inverse: #111214; /* 주 버튼 (Vercel 식 흑백) */
+  --inverse-hover: #33363b;
+  --on-inverse: #ffffff;
+
+  --neg: #c2410c; /* 음수 금액 */
+
+  --ok: #137a43;
+  --ok-bg: #f0faf4;
+  --ok-line: #9fd6b3;
+  --warn: #8f5500;
+  --warn-bg: #fff8eb;
+  --warn-line: #eec375;
+  --danger: #c0262d;
+  --danger-bg: #fff2f2;
+  --danger-line: #eb9a9d;
+
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    color-scheme: dark;
+
+    --canvas: #0f1012;
+    --subtle: #16181b;
+    --hover: #1d1f23;
+    --line: #26292e;
+    --line-strong: #3a3e45;
+    --control: #666b73;
+
+    --fg: #ededef;
+    --soft: #c9cbd0;
+    --muted: #9ca0a8;
+    --faint: #8e929a;
+
+    --accent: #6f8cf5;
+    --accent-text: #8fa6ff;
+    --accent-bg: #171d33;
+    --chart: #5b7cf0;
+
+    --inverse: #ededef;
+    --inverse-hover: #c9cbd0;
+    --on-inverse: #0f1012;
+
+    --neg: #ff9d66;
+
+    --ok: #5fcf8e;
+    --ok-bg: #0f1f16;
+    --ok-line: #24583a;
+    --warn: #f0b64a;
+    --warn-bg: #1f190c;
+    --warn-line: #6a4f16;
+    --danger: #ff8080;
+    --danger-bg: #261214;
+    --danger-line: #7a2d31;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans KR", sans-serif;
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-subtle: var(--subtle);
+  --color-hover: var(--hover);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-control: var(--control);
+  --color-fg: var(--fg);
+  --color-soft: var(--soft);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-text: var(--accent-text);
+  --color-accent-bg: var(--accent-bg);
+  --color-chart: var(--chart);
+  --color-inverse: var(--inverse);
+  --color-inverse-hover: var(--inverse-hover);
+  --color-on-inverse: var(--on-inverse);
+  --color-neg: var(--neg);
+  --color-ok: var(--ok);
+  --color-ok-bg: var(--ok-bg);
+  --color-ok-line: var(--ok-line);
+  --color-warn: var(--warn);
+  --color-warn-bg: var(--warn-bg);
+  --color-warn-line: var(--warn-line);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-danger-line: var(--danger-line);
+}
+
+/* 시스템 글꼴만 쓴다(외부 웹폰트 · CDN 없음). */
+@theme {
+  --font-sans:
+    system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic",
+    sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", Menlo, Consolas, monospace;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background: var(--canvas);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  /* 초점은 늘 보인다. 마우스 클릭에는 링을 그리지 않는다(:focus-visible). */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+
+  input,
+  select,
+  textarea {
+    background-color: var(--canvas);
+    color: var(--fg);
+  }
+
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: var(--accent);
+  }
+
+  ::selection {
+    background: var(--accent-bg);
+  }
 }

@@ -33,29 +33,32 @@ export function SiteNav() {
   if (HIDDEN_ON.some((hidden) => isCurrent(pathname, hidden))) return null;
 
   return (
-    <header className="mx-auto flex w-full max-w-5xl justify-end px-8 pt-6">
-      <nav aria-label="페이지">
-        <ul className="flex flex-wrap justify-end gap-x-4 gap-y-1 text-sm">
-          {NAV_PAGES.map((page) => {
-            const current = isCurrent(pathname, page.href);
-            return (
-              <li key={page.href}>
-                <Link
-                  href={page.href}
-                  aria-current={current ? "page" : undefined}
-                  className={
-                    current
-                      ? "font-semibold text-zinc-900 underline decoration-2 underline-offset-4 dark:text-zinc-100"
-                      : "text-zinc-600 underline-offset-4 hover:text-zinc-900 hover:underline dark:text-zinc-400 dark:hover:text-zinc-100"
-                  }
-                >
-                  {page.label}
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-      </nav>
+    <header className="border-b border-line">
+      <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4 px-4 py-2 sm:px-8">
+        <span className="hidden text-[13px] font-semibold tracking-tight sm:block">가계부</span>
+        <nav aria-label="페이지" className="min-w-0">
+          <ul className="flex flex-wrap justify-end gap-x-0.5 gap-y-1 text-xs sm:gap-x-1 sm:text-[13px]">
+            {NAV_PAGES.map((page) => {
+              const current = isCurrent(pathname, page.href);
+              return (
+                <li key={page.href}>
+                  <Link
+                    href={page.href}
+                    aria-current={current ? "page" : undefined}
+                    className={`block rounded-md border px-1 py-1 leading-5 sm:px-2 ${
+                      current
+                        ? "border-line-strong bg-subtle font-medium text-fg"
+                        : "border-transparent text-muted hover:bg-hover hover:text-fg"
+                    }`}
+                  >
+                    {page.label}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
+      </div>
     </header>
   );
 }

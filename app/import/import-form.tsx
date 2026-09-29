@@ -260,14 +260,14 @@ const SNIFF_LABEL: Record<Sniff, string> = {
 function PreviewStatus({ step }: { step: Step<PreviewData> }) {
   switch (step.status) {
     case "idle":
-      return <span className="text-zinc-500">대기</span>;
+      return <span className="text-muted">대기</span>;
     case "running":
-      return <span className="text-zinc-500">확인 중…</span>;
+      return <span className="text-muted">확인 중…</span>;
     case "ok":
-      return <span className="text-emerald-700 dark:text-emerald-400">성공</span>;
+      return <span className="text-ok">성공</span>;
     case "error":
       return (
-        <span className="text-red-700 dark:text-red-400">
+        <span className="text-danger">
           오류 · {step.failure.message}
         </span>
       );
@@ -277,7 +277,7 @@ function PreviewStatus({ step }: { step: Step<PreviewData> }) {
 function Warnings({ codes }: { codes: string[] }) {
   if (codes.length === 0) return null;
   return (
-    <ul className="list-inside list-disc text-xs text-amber-700 dark:text-amber-400">
+    <ul className="list-inside list-disc text-xs text-warn">
       {codes.map((code) => (
         <li key={code}>{warningText(code)}</li>
       ))}
@@ -486,7 +486,7 @@ export function ImportForm() {
     <div className="flex flex-col gap-8">
       {/* ① 담기 */}
       <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+        <h2 className="text-[13px] font-semibold text-fg">
           ① 파일 담기 (최대 {MAX_FILE_COUNT}개)
         </h2>
         <div
@@ -500,10 +500,10 @@ export function ImportForm() {
             setDragging(false);
             addFiles(event.dataTransfer.files);
           }}
-          className={`flex flex-col items-start gap-2 rounded-md border border-dashed p-4 text-sm ${
+          className={`flex flex-col items-start gap-2 rounded-md border border-dashed p-4 text-[13px] ${
             dragging
-              ? "border-zinc-900 bg-zinc-50 dark:border-zinc-100 dark:bg-zinc-900"
-              : "border-zinc-300 dark:border-zinc-700"
+              ? "border-accent bg-accent-bg"
+              : "border-line-strong"
           }`}
         >
           <input
@@ -516,23 +516,23 @@ export function ImportForm() {
               // 같은 파일을 지웠다가 다시 고를 수 있도록 선택값을 비운다.
               event.currentTarget.value = "";
             }}
-            className="text-sm file:mr-3 file:rounded-md file:border file:border-zinc-300 file:bg-transparent file:px-3 file:py-2 file:text-sm dark:file:border-zinc-700"
+            className="text-[13px] file:mr-3 file:rounded-md file:border file:border-line-strong file:bg-canvas file:px-3 file:py-1.5 file:text-[13px] file:font-medium file:text-fg hover:file:bg-hover"
           />
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-muted">
             여기로 끌어다 놓아도 됩니다. 여러 번 골라도 쌓입니다 — 폴더가 달라도 됩니다.
             한 파일당 4MB 까지. 담기만 해서는 아무것도 서버로 보내지 않습니다.
           </p>
         </div>
 
         {notice !== null ? (
-          <p role="status" className="text-sm text-amber-700 dark:text-amber-400">
+          <p role="status" className="text-[13px] text-warn">
             {notice}
           </p>
         ) : null}
 
         {staged.length > 0 ? (
-          <table className="w-full text-left text-sm">
-            <thead className="text-xs text-zinc-500">
+          <table className="w-full text-left text-[13px]">
+            <thead className="text-xs text-muted">
               <tr>
                 <th className="py-1 pr-2 font-normal">적용</th>
                 <th className="py-1 pr-2 font-normal">파일</th>
@@ -548,7 +548,7 @@ export function ImportForm() {
                 const applyFailure =
                   applyResult !== undefined && !applyResult.outcome.ok ? applyResult.outcome.failure : null;
                 return (
-                  <tr key={item.key} className="border-t border-zinc-200 align-top dark:border-zinc-800">
+                  <tr key={item.key} className="border-t border-line align-top">
                     <td className="py-2 pr-2">
                       <input
                         type="checkbox"
@@ -563,9 +563,9 @@ export function ImportForm() {
                     </td>
                     <td className="py-2 pr-2">
                       <p className="break-all">{item.file.name}</p>
-                      <p className="text-xs text-zinc-500">{sizeLabel(item.file.size)}</p>
+                      <p className="text-xs text-muted">{sizeLabel(item.file.size)}</p>
                       {ok !== null ? (
-                        <div className="mt-1 flex flex-col gap-1 text-xs text-zinc-700 dark:text-zinc-300">
+                        <div className="mt-1 flex flex-col gap-1 text-xs text-soft">
                           <p>
                             {ok.account.nickname} · {ok.period.from} ~ {ok.period.to} · 전체 {ok.total}건
                           </p>
@@ -577,7 +577,7 @@ export function ImportForm() {
                         </div>
                       ) : null}
                       {applyFailure !== null ? (
-                        <p className="mt-1 text-xs text-red-700 dark:text-red-400">
+                        <p className="mt-1 text-xs text-danger">
                           적용 실패 · {applyFailure.message}
                         </p>
                       ) : null}
@@ -585,7 +585,7 @@ export function ImportForm() {
                     <td className="py-2 pr-2 whitespace-nowrap">{SNIFF_LABEL[item.sniff]}</td>
                     <td className="py-2 pr-2">
                       {item.sniff === "invalid" || item.sniff === "tooLarge" ? (
-                        <span className="text-zinc-500">보낼 수 없음</span>
+                        <span className="text-muted">보낼 수 없음</span>
                       ) : (
                         <PreviewStatus step={item.preview} />
                       )}
@@ -595,7 +595,7 @@ export function ImportForm() {
                         type="button"
                         onClick={() => removeFile(item.key)}
                         disabled={locked}
-                        className="text-xs text-zinc-600 underline underline-offset-4 hover:text-zinc-900 disabled:opacity-50 dark:text-zinc-400"
+                        className="text-xs text-muted underline underline-offset-4 hover:text-fg disabled:opacity-50"
                       >
                         빼기
                       </button>
@@ -609,7 +609,7 @@ export function ImportForm() {
 
         {needsPassword ? (
           <div className="flex w-full flex-col gap-1">
-            <label htmlFor="statement-password" className="text-sm text-zinc-700 dark:text-zinc-300">
+            <label htmlFor="statement-password" className="text-[13px] text-soft">
               파일 비밀번호
             </label>
             <input
@@ -623,9 +623,9 @@ export function ImportForm() {
               value={password}
               onChange={(event) => onPasswordChange(event.currentTarget.value)}
               disabled={locked}
-              className="w-full max-w-xs rounded-md border border-zinc-300 bg-transparent px-3 py-2 text-sm dark:border-zinc-700"
+              className="h-9 w-full max-w-xs rounded-md border border-control bg-canvas px-3 text-[13px]"
             />
-            <p className="text-xs text-zinc-500 dark:text-zinc-500">
+            <p className="text-xs text-muted">
               암호가 걸린 파일이 있습니다. 세 파일 모두 같은 비밀번호로 풉니다.{" "}
               <strong className="font-medium">비밀번호는 서버에 저장하지 않습니다.</strong>{" "}
               요청마다 한 번 쓰고 바로 버리며, 암호 걸린 파일이 남지 않으면 이 입력칸도 비웁니다.
@@ -636,8 +636,8 @@ export function ImportForm() {
 
       {/* ② 미리보기 */}
       <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">② 미리보기</h2>
-        <p className="text-xs text-zinc-500">
+        <h2 className="text-[13px] font-semibold text-fg">② 미리보기</h2>
+        <p className="text-xs text-muted">
           파일마다 비밀번호 · 계좌 · 건수를 확인합니다. 이 단계에서는 아무것도 저장하지 않습니다.
           오류가 난 파일은 고친 뒤 다시 누르면 그 파일만 다시 확인합니다.
         </p>
@@ -646,13 +646,13 @@ export function ImportForm() {
             type="button"
             onClick={() => void runPreview()}
             disabled={locked || previewTargets.length === 0}
-            className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
+            className="h-9 rounded-md border border-line-strong bg-canvas px-4 text-[13px] font-medium hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy === "preview" ? "확인 중…" : `미리보기 (${previewTargets.length}개)`}
           </button>
         </div>
         {accountNotes.length > 0 ? (
-          <ul role="status" className="list-inside list-disc text-sm text-amber-700 dark:text-amber-400">
+          <ul role="status" className="list-inside list-disc text-[13px] text-warn">
             {accountNotes.map((note) => (
               <li key={note}>{note}</li>
             ))}
@@ -662,8 +662,8 @@ export function ImportForm() {
 
       {/* ③ 적용 */}
       <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">③ 월별 현금흐름에 적용</h2>
-        <p className="text-xs text-zinc-500">
+        <h2 className="text-[13px] font-semibold text-fg">③ 월별 현금흐름에 적용</h2>
+        <p className="text-xs text-muted">
           체크한 파일만 저장합니다. 서버가 파일을 처음부터 다시 검사한 뒤 저장하고, 이미 있는
           거래는 중복으로 건너뜁니다.
         </p>
@@ -672,7 +672,7 @@ export function ImportForm() {
             type="button"
             onClick={() => void runApply()}
             disabled={locked || applyTargets.length === 0}
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+            className="h-9 rounded-md bg-inverse px-4 text-[13px] font-medium text-on-inverse hover:bg-inverse-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy === "apply" ? "적용 중…" : `적용 (${applyTargets.length}개)`}
           </button>
@@ -681,22 +681,22 @@ export function ImportForm() {
 
       {applied !== null ? (
         <section className="flex flex-col gap-3">
-          <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">적용 결과</h2>
+          <h2 className="text-[13px] font-semibold text-fg">적용 결과</h2>
           <ul className="flex flex-col gap-3">
             {applied.map((result) => (
               <li
                 key={result.key}
-                className={`rounded-md border p-4 text-sm ${
+                className={`rounded-md border p-4 text-[13px] ${
                   result.outcome.ok
-                    ? "border-zinc-300 dark:border-zinc-700"
-                    : "border-red-400 bg-red-50 dark:bg-red-950/30"
+                    ? "border-line-strong"
+                    : "border-danger-line bg-danger-bg"
                 }`}
               >
                 <p className="font-medium break-all">
                   {result.outcome.ok ? "성공" : "오류"} · {result.filename}
                 </p>
                 {result.outcome.ok ? (
-                  <div className="mt-2 flex flex-col gap-1 text-zinc-700 dark:text-zinc-300">
+                  <div className="mt-2 flex flex-col gap-1 text-soft">
                     <p>
                       {result.outcome.data.account.nickname} · {result.outcome.data.period.from} ~{" "}
                       {result.outcome.data.period.to}
@@ -705,7 +705,7 @@ export function ImportForm() {
                       저장 {result.outcome.data.inserted}건 · 중복 {result.outcome.data.skipped}건
                     </p>
                     {result.outcome.data.unclassified > 0 ? (
-                      <p className="text-amber-700 dark:text-amber-400">
+                      <p className="text-warn">
                         이 파일에 미분류 거래가 {result.outcome.data.unclassified}건 있습니다.{" "}
                         {monthsOf(result.outcome.data.period).map((month) => (
                           <Link
@@ -724,7 +724,7 @@ export function ImportForm() {
                         <Link
                           key={month}
                           href={`/report?month=${month}`}
-                          className="underline underline-offset-4 hover:text-zinc-900 dark:hover:text-zinc-100"
+                          className="text-accent-text underline-offset-4 hover:underline"
                         >
                           {month} 리포트 보기
                         </Link>
@@ -732,7 +732,7 @@ export function ImportForm() {
                     </p>
                   </div>
                 ) : (
-                  <p className="mt-2 text-red-700 dark:text-red-400">{result.outcome.failure.message}</p>
+                  <p className="mt-2 text-danger">{result.outcome.failure.message}</p>
                 )}
               </li>
             ))}

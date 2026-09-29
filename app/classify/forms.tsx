@@ -71,7 +71,7 @@ function MonthBadge({ month }: { month: string }) {
   return (
     <span
       data-testid="group-month"
-      className="mr-2 inline-block rounded bg-zinc-800 px-1.5 py-0.5 align-middle text-xs font-normal text-white tabular-nums dark:bg-zinc-200 dark:text-zinc-900"
+      className="mr-2 inline-block rounded border border-line-strong bg-subtle px-1.5 py-0.5 align-middle text-xs font-medium text-fg tabular-nums"
     >
       {month}
     </span>
@@ -82,15 +82,15 @@ function MonthBadge({ month }: { month: string }) {
 function GroupMemo({ memo }: { memo: string | null }) {
   if (memo === null) return null;
   return (
-    <span data-testid="group-memo" className="block text-xs font-normal text-zinc-400 dark:text-zinc-500">
+    <span data-testid="group-memo" className="block text-xs font-normal text-faint">
       메모: {memo}
     </span>
   );
 }
 const INPUT =
-  "rounded-md border border-zinc-300 bg-transparent px-2 py-1 text-sm dark:border-zinc-700";
+  "h-8 rounded-md border border-control bg-canvas px-2 text-[13px]";
 const BUTTON =
-  "rounded-md border border-zinc-300 px-3 py-1 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900";
+  "h-8 rounded-md border border-line-strong bg-canvas px-3 text-[13px] font-medium hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50";
 
 /** lib/classify/direction.mjs 의 DIRECTION_LABELS 와 같은 이름. */
 const DIRECTION_TEXT: Record<string, string> = {
@@ -100,9 +100,9 @@ const DIRECTION_TEXT: Record<string, string> = {
 };
 
 const DIRECTION_BADGE: Record<string, string> = {
-  in: "bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300",
-  out: "bg-rose-50 text-rose-800 dark:bg-rose-950/40 dark:text-rose-300",
-  any: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
+  in: "border border-ok-line bg-ok-bg text-ok",
+  out: "border border-line-strong bg-subtle text-neg",
+  any: "border border-line bg-subtle text-soft",
 };
 
 function DirectionBadge({ direction }: { direction: string }) {
@@ -147,14 +147,14 @@ function failureText(data: Record<string, unknown>): string {
 function StatusLine({ status }: { status: Status }) {
   if (status.kind === "done") {
     return (
-      <p role="status" className="text-xs text-emerald-700 dark:text-emerald-400">
+      <p role="status" className="text-xs text-ok">
         {status.text}
       </p>
     );
   }
   if (status.kind === "error") {
     return (
-      <p role="alert" className="text-xs text-red-600">
+      <p role="alert" className="text-xs text-danger">
         {status.text}
       </p>
     );
@@ -188,9 +188,9 @@ function CategorySelect({
 }
 
 const ACCOUNT_BADGE: Record<string, string> = {
-  main: "border-zinc-300 text-zinc-700 dark:border-zinc-600 dark:text-zinc-300",
-  fixed: "border-amber-400 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200",
-  emergency: "border-rose-400 bg-rose-50 text-rose-900 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-200",
+  main: "border-line-strong text-soft",
+  fixed: "border-warn-line bg-warn-bg text-warn",
+  emergency: "border-danger-line bg-danger-bg text-danger",
 };
 
 function AccountBadge({ account }: { account: GroupAccount | null }) {
@@ -314,7 +314,7 @@ export function GroupForm({
     return (
       <div
         data-testid="classify-group-applied"
-        className="flex flex-wrap items-baseline justify-between gap-2 rounded-md border border-dashed border-zinc-300 px-3 py-2 text-xs text-zinc-500 dark:border-zinc-700"
+        className="flex flex-wrap items-baseline justify-between gap-2 rounded-lg border border-dashed border-line-strong px-3 py-2 text-xs text-muted"
       >
         <span className="break-all">
           {showMonth ? <MonthBadge month={month} /> : null}
@@ -334,7 +334,7 @@ export function GroupForm({
     <form
       onSubmit={submit}
       data-testid="classify-group"
-      className="flex flex-col gap-2 rounded-md border border-zinc-300 p-3 text-sm dark:border-zinc-700"
+      className="flex flex-col gap-2 rounded-lg border border-line bg-canvas p-3 text-[13px]"
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="font-medium break-all">
@@ -344,11 +344,11 @@ export function GroupForm({
           {group.key}
           <GroupMemo memo={group.memo} />
         </p>
-        <p className="tabular-nums text-zinc-600 dark:text-zinc-400">
+        <p className="tabular-nums text-muted">
           {group.count}건 · {FLOW.format(group.total)}원
         </p>
       </div>
-      <p className="text-xs text-zinc-500">
+      <p className="text-xs text-muted">
         현재: {current} · 항목: {group.mixedItem ? "혼합" : (group.item ?? "—")}
         {group.unclassified > 0 && group.unclassified < group.count
           ? ` · 미분류 ${group.unclassified}건`
@@ -356,31 +356,31 @@ export function GroupForm({
         {group.manual > 0 ? ` · ‘이번만’으로 고른 거래 ${group.manual}건` : ""}
       </p>
       {group.transferIn > 0 ? (
-        <p className="text-xs text-sky-700 dark:text-sky-400">
+        <p className="text-xs text-accent-text">
           이 중 {group.transferIn}건은 메인 계좌에서 옮겨 온 돈(내 계좌 간 이체)으로 확인됐습니다.
           분류하지 않아도 현금흐름표의 ‘{accountLabel(group.account)}’ 입금으로 들어가므로 미분류로
           세지 않습니다.
         </p>
       ) : null}
       {group.vault > 0 ? (
-        <p className="text-xs text-sky-700 dark:text-sky-400">
+        <p className="text-xs text-accent-text">
           {group.direction === "out"
             ? `이 중 ${group.vault}건은 ${accountLabel(group.account)}에 연결된 금고로 옮긴 돈(금고저축)으로 봅니다. 분류와 무관하게 현금흐름표 ‘${accountLabel(group.account)}’ 표의 ‘금고저축’ 줄로 들어가고 쓴 돈(집행)으로 세지 않으므로, 미분류로도 세지 않습니다.`
             : `이 중 ${group.vault}건은 ${accountLabel(group.account)}에 연결된 금고에서 꺼낸 돈(금고 인출)으로 봅니다. 분류와 무관하게 현금흐름표 ‘${accountLabel(group.account)}’ 표의 ‘금고 인출’ 줄로 들어가고 메인에서 온 입금으로 세지 않으므로, 미분류로도 세지 않습니다.`}
         </p>
       ) : null}
       {group.transfer > 0 ? (
-        <p className="text-xs text-amber-700 dark:text-amber-400">
+        <p className="text-xs text-warn">
           내 계좌 간 이동으로 표시된 거래가 {group.transfer}건 있습니다. 이 거래들은 분류와
           무관하게 현금흐름표의 ‘계좌간이동’ 줄에 들어갑니다.
         </p>
       ) : null}
       <div className="flex flex-wrap items-center gap-2">
-        <label htmlFor={`category-${uid}`} className="text-xs text-zinc-600 dark:text-zinc-400">
+        <label htmlFor={`category-${uid}`} className="text-xs text-muted">
           분류
         </label>
         <CategorySelect id={`category-${uid}`} value={category} onChange={setCategory} categories={categories} />
-        <label htmlFor={`item-${uid}`} className="text-xs text-zinc-600 dark:text-zinc-400">
+        <label htmlFor={`item-${uid}`} className="text-xs text-muted">
           항목
         </label>
         <input
@@ -417,7 +417,7 @@ export function GroupForm({
           </label>
         </fieldset>
         {scope === "always" && group.memo !== null ? (
-          <fieldset className="flex items-center gap-3 text-xs text-zinc-600 dark:text-zinc-400" data-testid="basis">
+          <fieldset className="flex items-center gap-3 text-xs text-muted" data-testid="basis">
             <legend className="sr-only">앞으로도 기준</legend>
             <label className="flex items-center gap-1">
               <input
@@ -442,7 +442,7 @@ export function GroupForm({
           </fieldset>
         ) : null}
         {scope === "always" && !byMemo ? (
-          <label className="flex items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+          <label className="flex items-center gap-1 text-xs text-muted">
             <input type="checkbox" checked={usePattern} onChange={(event) => setUsePattern(event.target.checked)} />
             달마다 바뀌는 부분이 있어요 — 패턴으로 저장
           </label>
@@ -452,7 +452,7 @@ export function GroupForm({
         </button>
       </div>
       {byMemo ? (
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-muted">
           메모가 <strong>{group.memo}</strong> 인 {DIRECTION_TEXT[group.direction]} 거래라면 적요 · 계좌 · 달과
           무관하게 이 분류를 붙입니다(‘이번만’으로 고른 거래는 그대로). 메모 기준 매핑은 적요 기준 매핑보다 먼저
           걸립니다.
@@ -545,9 +545,9 @@ function PatternEditor({
   const other: Direction = direction === "out" ? "in" : "out";
 
   return (
-    <div className="flex flex-col gap-1 rounded-md bg-zinc-50 p-2 text-xs dark:bg-zinc-900" data-testid="pattern-editor">
+    <div className="flex flex-col gap-1 rounded-md border border-line bg-subtle p-2 text-xs" data-testid="pattern-editor">
       <div className="flex flex-wrap items-center gap-2">
-        <label htmlFor={id} className="text-zinc-600 dark:text-zinc-400">
+        <label htmlFor={id} className="text-muted">
           패턴
         </label>
         <input
@@ -560,20 +560,20 @@ function PatternEditor({
           spellCheck={false}
         />
       </div>
-      <p className="text-zinc-500">
+      <p className="text-muted">
         <code>#</code> 는 숫자 한 자리, <code>*</code> 는 아무 글자 여러 개(없어도 됨)입니다. 나머지는 글자 그대로
         비교하고, 적요 전체와 맞아야 합니다. 예: 흥국01184 · 흥국02184 → <code>흥국##184</code>
       </p>
       {localError !== null ? (
-        <p role="alert" className="text-red-600">
+        <p role="alert" className="text-danger">
           {localError}
         </p>
       ) : current === null ? (
-        <p className="text-zinc-500">맞는 거래를 세는 중…</p>
+        <p className="text-muted">맞는 거래를 세는 중…</p>
       ) : current.failed || current.data === null ? (
-        <p className="text-zinc-500">미리보기를 불러오지 못했습니다. 저장은 할 수 있습니다.</p>
+        <p className="text-muted">미리보기를 불러오지 못했습니다. 저장은 할 수 있습니다.</p>
       ) : (
-        <div data-testid="pattern-preview" className="text-zinc-600 dark:text-zinc-400">
+        <div data-testid="pattern-preview" className="text-muted">
           <p>
             이미 올린 거래 중 이 패턴에 맞는 <strong>{DIRECTION_TEXT[direction]}</strong>{" "}
             {current.data[direction].count}건(서로 다른 적요 {current.data[direction].distinct}개)
@@ -583,7 +583,7 @@ function PatternEditor({
             {current.data[direction].samples.length > 0 ? ` · 예: ${current.data[direction].samples.join(", ")}` : ""}
           </p>
           {current.data[other].count > 0 ? (
-            <p className="text-zinc-500">
+            <p className="text-muted">
               같은 패턴의 {DIRECTION_TEXT[other]} {current.data[other].count}건은 이 저장과 무관합니다(패턴은 이
               묶음의 방향에만 걸립니다).
             </p>
@@ -657,24 +657,24 @@ export function PatternRow({ saved, categories }: { saved: SavedPattern; categor
   return (
     <div
       data-testid="pattern-row"
-      className="flex flex-col gap-2 rounded-md border border-zinc-300 p-3 text-sm dark:border-zinc-700"
+      className="flex flex-col gap-2 rounded-lg border border-line bg-canvas p-3 text-[13px]"
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="font-medium break-all">
           <DirectionBadge direction={saved.direction} />
           <code>{saved.pattern}</code>
         </p>
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-muted">
           {saved.category} · {saved.item ?? "(적요 그대로)"} · {saved.updatedAt.slice(0, 10)}
         </p>
       </div>
       {editing ? (
         <form onSubmit={save} className="flex flex-wrap items-center gap-2">
-          <label htmlFor={`pat-category-${uid}`} className="text-xs text-zinc-600 dark:text-zinc-400">
+          <label htmlFor={`pat-category-${uid}`} className="text-xs text-muted">
             분류
           </label>
           <CategorySelect id={`pat-category-${uid}`} value={category} onChange={setCategory} categories={categories} />
-          <label htmlFor={`pat-item-${uid}`} className="text-xs text-zinc-600 dark:text-zinc-400">
+          <label htmlFor={`pat-item-${uid}`} className="text-xs text-muted">
             항목
           </label>
           <input
@@ -782,20 +782,20 @@ export function MappingRow({ mapping, categories }: { mapping: Mapping; categori
   return (
     <div
       data-testid="mapping-row"
-      className="flex flex-col gap-2 rounded-md border border-zinc-300 p-3 text-sm dark:border-zinc-700"
+      className="flex flex-col gap-2 rounded-lg border border-line bg-canvas p-3 text-[13px]"
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="font-medium break-all">
           <DirectionBadge direction={mapping.direction} />
           {mapping.key}
         </p>
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-muted">
           {mapping.category} · {mapping.item ?? "(적요 그대로)"} · {updated}
         </p>
       </div>
       {editing ? (
         <form onSubmit={save} className="flex flex-wrap items-center gap-2">
-          <label htmlFor={`map-category-${uid}`} className="text-xs text-zinc-600 dark:text-zinc-400">
+          <label htmlFor={`map-category-${uid}`} className="text-xs text-muted">
             분류
           </label>
           <CategorySelect
@@ -804,7 +804,7 @@ export function MappingRow({ mapping, categories }: { mapping: Mapping; categori
             onChange={setCategory}
             categories={categories}
           />
-          <label htmlFor={`map-item-${uid}`} className="text-xs text-zinc-600 dark:text-zinc-400">
+          <label htmlFor={`map-item-${uid}`} className="text-xs text-muted">
             항목
           </label>
           <input
@@ -903,24 +903,24 @@ export function MemoMappingRow({ mapping, categories }: { mapping: MemoMapping; 
   return (
     <div
       data-testid="memo-mapping-row"
-      className="flex flex-col gap-2 rounded-md border border-zinc-300 p-3 text-sm dark:border-zinc-700"
+      className="flex flex-col gap-2 rounded-lg border border-line bg-canvas p-3 text-[13px]"
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="font-medium break-all">
           <DirectionBadge direction={mapping.direction} />
-          <span className="text-xs font-normal text-zinc-500">메모</span> {mapping.memo}
+          <span className="text-xs font-normal text-muted">메모</span> {mapping.memo}
         </p>
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-muted">
           {mapping.category} · {mapping.item ?? "(적요 그대로)"} · {mapping.updatedAt.slice(0, 10)}
         </p>
       </div>
       {editing ? (
         <form onSubmit={save} className="flex flex-wrap items-center gap-2">
-          <label htmlFor={`memo-category-${uid}`} className="text-xs text-zinc-600 dark:text-zinc-400">
+          <label htmlFor={`memo-category-${uid}`} className="text-xs text-muted">
             분류
           </label>
           <CategorySelect id={`memo-category-${uid}`} value={category} onChange={setCategory} categories={categories} />
-          <label htmlFor={`memo-item-${uid}`} className="text-xs text-zinc-600 dark:text-zinc-400">
+          <label htmlFor={`memo-item-${uid}`} className="text-xs text-muted">
             항목
           </label>
           <input

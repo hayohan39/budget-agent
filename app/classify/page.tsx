@@ -57,12 +57,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const PLAIN_LINK =
-  "text-sm text-zinc-600 underline underline-offset-4 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100";
+  "text-[13px] text-accent-text underline-offset-4 hover:underline";
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 p-8">
-      <h1 className="text-2xl font-semibold tracking-tight">분류 정리</h1>
+    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-4 py-6 sm:px-8 sm:py-8">
+      <h1 className="text-xl font-semibold tracking-tight">분류 정리</h1>
       {children}
     </main>
   );
@@ -80,14 +80,14 @@ function Picker({
   const options = months.includes(selected) || selected === ALL_MONTHS ? months : [selected, ...months];
   return (
     <Form action="/classify" className="flex flex-wrap items-center gap-2">
-      <label htmlFor="month" className="text-sm text-zinc-600 dark:text-zinc-400">
+      <label htmlFor="month" className="text-[13px] text-muted">
         조회 월
       </label>
       <select
         id="month"
         name="month"
         defaultValue={selected}
-        className="rounded-md border border-zinc-300 bg-transparent px-2 py-1 text-sm dark:border-zinc-700"
+        className="h-8 rounded-md border border-control bg-canvas px-2 text-[13px]"
       >
         <option value={ALL_MONTHS}>전체 기간</option>
         {options.map((month) => (
@@ -96,21 +96,21 @@ function Picker({
           </option>
         ))}
       </select>
-      <label htmlFor="filter" className="ml-2 text-sm text-zinc-600 dark:text-zinc-400">
+      <label htmlFor="filter" className="ml-2 text-[13px] text-muted">
         보기
       </label>
       <select
         id="filter"
         name="filter"
         defaultValue={filter}
-        className="rounded-md border border-zinc-300 bg-transparent px-2 py-1 text-sm dark:border-zinc-700"
+        className="h-8 rounded-md border border-control bg-canvas px-2 text-[13px]"
       >
         <option value={CLASSIFY_FILTERS.unclassified}>미분류만</option>
         <option value={CLASSIFY_FILTERS.all}>전체</option>
       </select>
       <button
         type="submit"
-        className="rounded-md border border-zinc-300 px-3 py-1 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
+        className="h-8 rounded-md border border-line-strong bg-canvas px-3 text-[13px] font-medium hover:bg-hover"
       >
         보기
       </button>
@@ -155,7 +155,7 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
   if (!isAllowedEmail(session.user?.email)) {
     return (
       <Shell>
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-[13px] text-danger">
           접근 권한이 없습니다.
         </p>
       </Shell>
@@ -167,7 +167,7 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
   if (requested !== "" && requested !== ALL_MONTHS && !isYearMonth(requested)) {
     return (
       <Shell>
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-[13px] text-danger">
           조회할 월의 형식이 올바르지 않습니다. 주소의 <code>month</code> 값은
           <code> YYYY-MM</code> 이어야 합니다.
         </p>
@@ -203,7 +203,7 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
   } catch {
     return (
       <Shell>
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-[13px] text-danger">
           데이터를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.
         </p>
       </Shell>
@@ -215,13 +215,13 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
   return (
     <Shell>
       {loaded.month === null ? (
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+        <p className="text-[13px] text-muted">
           아직 저장된 거래가 없습니다. 거래내역을 먼저 올려주세요.
         </p>
       ) : (
         <>
           <Picker months={loaded.months} selected={loaded.month} filter={filter} />
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-muted">
             <strong>계좌별로</strong> 나누고, 그 안에서 같은 적요끼리 묶어 보여 줍니다. 같은
             적요라도 <strong>입금과 출금은 따로</strong> 묶습니다(용도가 다르기 때문입니다).{" "}
             <strong>이번만</strong>은 이 달 이 계좌의 이 묶음에만 적용하고, 나중에 매핑이나
@@ -241,20 +241,20 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
           </p>
           <ReclassifyButton />
           {loaded.month === ALL_MONTHS ? (
-            <p className="rounded-md bg-sky-50 p-2 text-xs text-sky-900 dark:bg-sky-950/40 dark:text-sky-200">
+            <p className="rounded-md border border-line bg-accent-bg p-2 text-xs text-fg">
               <strong>전체 기간</strong> — 모든 달의 묶음을 <strong>달별로</strong> 한 화면에 모았습니다(최신 달 먼저).
               묶음은 여전히 그 달에 속하고, <strong>이번만</strong>은 <strong>그 달의 그 묶음에만</strong> 적용합니다.{" "}
               <strong>앞으로도</strong>는 한 달 보기와 같습니다(다른 달의 같은 적요에도, ‘이번만’으로 고른 거래는 그대로).
             </p>
           ) : null}
           {loaded.truncated ? (
-            <p role="alert" className="text-xs text-amber-700 dark:text-amber-400">
+            <p role="alert" className="text-xs text-warn">
               거래가 많아 최근 {MAX_ALL_PERIOD_ROWS.toLocaleString("ko-KR")}건 안의 달까지만 보여 줍니다. 더 오래된 달은
               조회 월에서 골라 주세요.
             </p>
           ) : null}
           {loaded.sections.every((section) => section.groups.length === 0) ? (
-            <p className="text-sm text-zinc-600 dark:text-zinc-400">
+            <p className="text-[13px] text-muted">
               {`${loaded.month === ALL_MONTHS ? "전체 기간" : loaded.month} 에 ${
                 filter === CLASSIFY_FILTERS.unclassified ? "미분류 거래가" : "저장된 거래가"
               } 없습니다.`}
@@ -269,9 +269,9 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
                   className="flex flex-col gap-6"
                 >
                   {loaded.month === ALL_MONTHS ? (
-                    <h2 className="border-b border-zinc-300 pb-1 text-base font-semibold dark:border-zinc-700">
+                    <h2 className="border-b border-line pb-1.5 text-[15px] font-semibold tracking-tight">
                       {monthSection.month}
-                      <span className="ml-2 text-xs font-normal text-zinc-500">
+                      <span className="ml-2 text-xs font-normal text-muted">
                         {monthSection.groups.length}묶음 ·{" "}
                         <Link href={classifyMonthHref(monthSection.month, filter)} className="underline underline-offset-4">
                           이 달만 보기
@@ -288,10 +288,10 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
                       <h3
                         id={`account-${monthSection.month}-${section.id}`}
                         data-testid="account-section"
-                        className="text-sm font-semibold text-zinc-700 dark:text-zinc-300"
+                        className="text-[13px] font-semibold text-fg"
                       >
                         {section.label}
-                        <span className="ml-2 text-xs font-normal text-zinc-500">{section.groups.length}묶음</span>
+                        <span className="ml-2 text-xs font-normal text-muted">{section.groups.length}묶음</span>
                       </h3>
                       <ul className="flex flex-col gap-3">
                         {section.groups.map((group) => (
@@ -327,15 +327,15 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
       )}
 
       <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">저장된 패턴</h2>
-        <p className="text-xs text-zinc-500">
+        <h2 className="text-[13px] font-semibold text-fg">저장된 패턴</h2>
+        <p className="text-xs text-muted">
           ‘앞으로도’에서 ‘패턴으로 저장’을 고른 것들입니다. <code>#</code> 는 숫자 한 자리, <code>*</code> 는 아무
           글자입니다. 정확한 적요로 저장한 매핑이 패턴보다 먼저 걸리고, 여러 패턴이 맞으면 # · * 가 아닌 글자가
           많은 패턴이, 같으면 먼저 만든 패턴이 이깁니다. 지우면 이 패턴으로 분류된 거래가 다시 분류됩니다(‘이번만’으로
           고른 거래는 그대로).
         </p>
         {loaded.patterns.length === 0 ? (
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">저장된 패턴이 없습니다.</p>
+          <p className="text-[13px] text-muted">저장된 패턴이 없습니다.</p>
         ) : (
           <ul className="flex flex-col gap-2">
             {loaded.patterns.map((saved) => (
@@ -348,13 +348,13 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
       </section>
 
       <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">저장된 메모 매핑</h2>
-        <p className="text-xs text-zinc-500">
+        <h2 className="text-[13px] font-semibold text-fg">저장된 메모 매핑</h2>
+        <p className="text-xs text-muted">
           ‘앞으로도’를 <strong>이 메모 기준</strong>으로 저장한 것들입니다. 메모가 같고 방향이 같은 거래라면 적요 · 계좌와
           무관하게 걸리고, 적요 기준 매핑 · 패턴 · 규칙보다 먼저 봅니다. 지우면 이 매핑으로 분류된 거래가 다시 분류됩니다.
         </p>
         {loaded.memoMappings.length === 0 ? (
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">저장된 메모 매핑이 없습니다.</p>
+          <p className="text-[13px] text-muted">저장된 메모 매핑이 없습니다.</p>
         ) : (
           <ul className="flex flex-col gap-2">
             {loaded.memoMappings.map((mapping) => (
@@ -367,8 +367,8 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
       </section>
 
       <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">저장된 매핑</h2>
-        <p className="text-xs text-zinc-500">
+        <h2 className="text-[13px] font-semibold text-fg">저장된 매핑</h2>
+        <p className="text-xs text-muted">
           ‘앞으로도’로 저장한 것들입니다. 새로 올리는 거래는 규칙보다 이 매핑을 먼저
           봅니다. 입금 · 출금 매핑이 따로 있고, ‘방향 무관’은 입금 · 출금을 나누기 전에
           저장한 매핑으로 같은 방향의 매핑이 없는 쪽에만 걸립니다. 지우면 이 매핑으로
@@ -376,7 +376,7 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
           규칙으로. ‘이번만’으로 고른 거래는 그대로).
         </p>
         {loaded.mappings.length === 0 ? (
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">저장된 매핑이 없습니다.</p>
+          <p className="text-[13px] text-muted">저장된 매핑이 없습니다.</p>
         ) : (
           <ul className="flex flex-col gap-2">
             {loaded.mappings.map((mapping) => (
