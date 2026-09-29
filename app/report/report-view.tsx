@@ -62,13 +62,30 @@ export type Verification = ReturnType<typeof verifyMonthlyReport>;
  * `fixedSection`) JS 쪽 추론이 `any` 로 끝난다. 화면이 읽는 모양을 여기 적어
  * 두고 그 타입으로 받는다 — 집계가 바뀌면 이 줄이 먼저 어긋난다.
  */
-type SectionItem = { key: string; total: number; count: number; tag?: string; flow?: string };
+type SectionItem = {
+  key: string;
+  total: number;
+  count: number;
+  tag?: string;
+  flow?: string;
+  memos?: string[];
+  memoCount?: number;
+};
 
 /**
  * `항목별` 의 한 줄. (분류, 항목, 방향) 단위다. 같은 항목의 입금과 출금은 서로
  * 다른 줄이다 — 한 줄 안에서 부호가 섞이지 않는다.
  */
-type Line = { category: string; item: string; direction: "in" | "out"; total: number; count: number };
+type Line = {
+  category: string;
+  item: string;
+  direction: "in" | "out";
+  total: number;
+  count: number;
+  /** 그 줄 거래들의 서로 다른 메모(상위 몇 개, lib/report/monthly.mjs 의 LINE_MEMO_LIMIT)와 전체 개수. */
+  memos: string[];
+  memoCount: number;
+};
 
 const DIRECTION_TEXT: Record<Line["direction"], string> = { in: "입금", out: "출금" };
 
@@ -86,7 +103,28 @@ function linesAsItems(lines: Line[], kind?: string, natural: Line["direction"] =
     count: line.count,
     tag: kind !== undefined && line.category === kind ? undefined : line.category,
     flow: line.direction === natural ? undefined : DIRECTION_TEXT[line.direction],
+    memos: line.memos,
+    memoCount: line.memoCount,
   }));
+}
+
+/**
+ * 항목 이름 아래의 메모(2026-09, 사용자 요청: "메모도 중요한 정보야. sub text 로 항목 아래
+ * 작은 회색글씨로"). 한 줄에 서로 다른 메모가 여럿이면 자주 나온 몇 개만 보이고 나머지는
+ * 개수로 줄인다. 메모는 적요처럼 이 화면에만 그린다(로그 · 에러에 싣지 않는다).
+ */
+function MemoNote({ memos, memoCount, item }: { memos?: string[]; memoCount?: number; item: string }) {
+  if (memos === undefined || memos.length === 0) return null;
+  const more = (memoCount ?? memos.length) - memos.length;
+  // 메모가 곧 항목 이름인 줄(메모로 분류된 저축 등)은 같은 글자를 두 번 쓰지 않는다.
+  const shown = memos.filter((memo) => memo !== item);
+  if (shown.length === 0 && more <= 0) return null;
+  return (
+    <span data-testid="item-memo" className="block text-xs text-zinc-400 dark:text-zinc-500">
+      {shown.join(" · ")}
+      {more > 0 ? `${shown.length > 0 ? " " : ""}외 메모 ${more}개` : ""}
+    </span>
+  );
 }
 
 /** 흐름 금액. 부호를 항상 붙인다(0 은 부호 없음). */
@@ -214,6 +252,7 @@ function ItemCell({ item }: { item: SectionItem }) {
   return (
     <td className={`${CELL} break-keep wrap-anywhere`}>
       <span className="block">{item.key}</span>
+      <MemoNote memos={item.memos} memoCount={item.memoCount} item={item.key} />
       <span className="block text-xs text-zinc-500">
         {item.tag !== undefined ? (
           <span className="mr-1 rounded bg-zinc-100 px-1 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
@@ -418,6 +457,7 @@ function AccountTable({
               ) : null}
               <td className={`${CELL} break-keep wrap-anywhere`}>
                 <span className="block">{line.item}</span>
+                <MemoNote memos={line.memos} memoCount={line.memoCount} item={line.item} />
                 <span className="block text-xs text-zinc-500">
                   {line.category !== block.nickname ? (
                     <span className="mr-1 rounded bg-zinc-100 px-1 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">

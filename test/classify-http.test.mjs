@@ -30,7 +30,7 @@ function fakeClient() {
       queries.push({ text, values });
       if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(text)) return { rows: [], rowCount: 0 };
       if (text.startsWith('SELECT pg_advisory_xact_lock(')) return { rows: [{}], rowCount: 1 };
-      if (text.startsWith('SELECT t.id, t.description, t.amount') && text.includes('a.role = $2')) {
+      if (text.startsWith('SELECT t.id, t.description, t.memo, t.amount') && text.includes('a.role = $2')) {
         // 계좌는 역할로 거른다. 메인이 아닌 계좌에는 이 달 거래가 없다.
         const rows = values[1] === 'main' ? [{ id: '41', description: '코인적립', amount: '-200000' }] : [];
         return { rows, rowCount: rows.length };
