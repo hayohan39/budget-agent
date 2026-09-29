@@ -491,6 +491,13 @@ function AccountTable({
             ) : null}
           </>
         ) : null}
+        {block.무효.count > 0 ? (
+          <WideRow
+            label="무효 처리"
+            value={flow(block.무효.total)}
+            note={`상쇄한 출금 · 입금 ${block.무효.count}건 · 순증감 제외`}
+          />
+        ) : null}
         <WideRow
           label="순증감"
           value={flow(block.순증감)}
@@ -661,6 +668,11 @@ export function ReportView({
   // 합계에서만 조용히 사라지는 돈이 없어야 한다.
   if (기타이체 !== 0) {
     summaryRows.push({ label: "기타 이체", value: 기타이체, note: "목적지 미확인" });
+  }
+  // 무효(상쇄)로 표시한 메인 계좌 거래. 같은 달의 쌍이면 0 이고, 달을 걸친 쌍이면 이 달에
+  // 남은 한쪽 금액이다(메인 잔액이 실제로 움직였다). 건이 있을 때만 그린다.
+  if (report.무효처리.count > 0) {
+    summaryRows.push({ label: "무효 처리", value: report.종합정산.무효처리, note: `상쇄 ${report.무효처리.count}건` });
   }
 
   const shown = summaryRows.reduce((sum, item) => sum + item.value, 0);
