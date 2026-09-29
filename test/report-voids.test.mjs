@@ -429,6 +429,30 @@ test('실제 DB: 직접 보낸 id 도 후보 조건으로 거부된다(창 · �
   });
 });
 
+test('실제 DB: 짧은 2월을 낀 31일 안의 쌍(1/31 -> 3/2)도 양쪽 달 목록에 나오고, 2월에는 안 나온다', async (t) => {
+  await withScratchDatabase(t, 'voids_february', async (client) => {
+    await insertTransactions(client, [
+      // 2027 년은 윤년이 아니다 — 1/31 -> 3/2 는 30일(창 안)이지만 달로는 두 칸 떨어져 있다.
+      record(1, { txn_at: '2027-01-31T09:00:00+09:00', year_month: '2027-01', amount: -300000 }),
+      record(2, { txn_at: '2027-03-02T09:00:00+09:00', year_month: '2027-03', txn_type: '입금', amount: 300000 }),
+      // 창 밖(1/31 -> 3/5, 33일)은 넓힌 읽기에도 나오지 않는다.
+      record(3, { txn_at: '2027-01-31T10:00:00+09:00', year_month: '2027-01', amount: -700000 }),
+      record(4, { txn_at: '2027-03-05T10:00:00+09:00', year_month: '2027-03', txn_type: '입금', amount: 700000 }),
+    ]);
+    const [out, inn] = await Promise.all(['test-void-1', 'test-void-2'].map((key) => idOf(client, key)));
+
+    for (const month of ['2027-01', '2027-03']) {
+      const listed = await listVoidCandidates(client, month);
+      assert.deepEqual(listed.map((c) => [c.out.id, c.in.id]), [[out, inn]], month);
+    }
+    // 한쪽이 이 달인 쌍만 보인다 — 2월에는 두 다리 모두 없다.
+    assert.deepEqual(await listVoidCandidates(client, '2027-02'), []);
+    // 목록에 나온 쌍은 voidPair 도 받아들인다(같은 판정).
+    assert.equal((await voidPair(client, { outId: out, inId: inn })).ok, true);
+    assert.deepEqual(await listVoidCandidates(client, '2027-01'), []);
+  });
+});
+
 /** 결정적 의사 난수(mulberry32). 실패를 재현할 수 있게 씨앗을 고정한다. */
 function prng(seed) {
   let state = seed >>> 0;
