@@ -160,7 +160,9 @@ test('요청: 메모는 정규화하고, 메모 기준은 앞으로도 · 메모
   assert.equal(parseClassifyRequest({ ...VALID, basis: 'memo' }).error, 'noMemo');
   assert.equal(parseClassifyRequest({ ...VALID, scope: 'once', memo: '길동 IRP', basis: 'memo' }).error, 'badScope');
   assert.equal(parseClassifyRequest({ ...VALID, memo: '길동 IRP', basis: 'memo', stripMonth: true }).error, 'memoWithOption');
-  assert.equal(parseClassifyRequest({ ...VALID, memo: '길동 IRP', basis: 'memo', pattern: '홍##' }).error, 'memoWithOption');
+  // 메모 기준 + 패턴은 2026-09 부터 된다(메모 패턴 — test/classify-memo-patterns.test.mjs).
+  const memoPattern = parseClassifyRequest({ ...VALID, memo: '길동 IRP', basis: 'memo', pattern: ' 길동 ## ' });
+  assert.deepEqual([memoPattern.ok, memoPattern.value?.basis, memoPattern.value?.pattern], [true, 'memo', '길동 ##']);
   assert.equal(parseClassifyRequest({ ...VALID, memo: '길동 IRP', basis: 'memo' }).value.basis, 'memo');
 
   assert.equal(parseMemoMappingRequest({ action: 'delete', memo: '길동 IRP', direction: 'any' }).error, 'badDirection');

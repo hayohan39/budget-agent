@@ -40,6 +40,8 @@ export type ClassifyGroup = {
 export type SavedPattern = {
   pattern: string;
   direction: MappingDirection;
+  /** 패턴이 거는 대상. 적요(description_patterns) 또는 메모(memo_patterns). */
+  basis: "description" | "memo";
   category: string;
   item: string | null;
   updatedAt: string;
@@ -269,9 +271,13 @@ export function GroupForm({
   // ‘앞으로도’ 의 기준. 메모가 있는 묶음에서만 메모를 고를 수 있다.
   const [basis, setBasis] = useState<"description" | "memo">("description");
   const byMemo = scope === "always" && basis === "memo" && group.memo !== null;
-  // 적요 패턴으로 저장(앞으로도에서만). 입력칸은 적요에서 만든 제안으로 미리 채운다.
+  // 패턴으로 저장(앞으로도에서만). 적요 기준이면 적요 패턴, 메모 기준이면 메모 패턴(2026-09)이고
+  // 입력칸은 각각 적요 · 메모에서 만든 제안으로 미리 채운다. 기준을 바꿔도 입력한 값은 따로 남는다.
   const [usePattern, setUsePattern] = useState(false);
-  const [pattern, setPattern] = useState(() => suggestPattern(group.key));
+  const [descriptionPattern, setDescriptionPattern] = useState(() => suggestPattern(group.key));
+  const [memoPattern, setMemoPattern] = useState(() => (group.memo === null ? "" : suggestPattern(group.memo)));
+  const pattern = byMemo ? memoPattern : descriptionPattern;
+  const setPattern = byMemo ? setMemoPattern : setDescriptionPattern;
   const [status, setStatus] = useState<Status>({ kind: "idle" });
 
   // id 에 적요를 넣지 않는다(DOM id 에 한글·공백이 섞이면 label 연결이 깨진다).
@@ -298,8 +304,8 @@ export function GroupForm({
         item,
         // '이번만'에서는 뜻이 없다(JSON.stringify 가 undefined 키를 뺀다).
         // 패턴은 '앞으로도' 에서만 보낸다. 서버가 같은 규칙으로 다시 검사하고, 지금 고른
-        // 적요와 맞는지도 서버가 확인한다.
-        pattern: scope === "always" && usePattern && !byMemo ? pattern : undefined,
+        // 적요(메모 기준이면 메모)와 맞는지도 서버가 확인한다.
+        pattern: scope === "always" && usePattern ? pattern : undefined,
       });
       if (!ok) {
         setCollapsed(false);
@@ -465,7 +471,7 @@ export function GroupForm({
             </label>
           </fieldset>
         ) : null}
-        {scope === "always" && !byMemo ? (
+        {scope === "always" ? (
           <label className="flex items-center gap-1 text-xs text-muted">
             <input type="checkbox" checked={usePattern} onChange={(event) => setUsePattern(event.target.checked)} />
             패턴으로 저장
@@ -475,12 +481,15 @@ export function GroupForm({
           {status.kind === "busy" ? "저장 중…" : "적용"}
         </button>
       </div>
-      {scope === "always" && usePattern && !byMemo ? (
+      {scope === "always" && usePattern ? (
         <PatternEditor
+          // 기준이 바뀌면 미리보기 상태를 새로 시작한다.
+          key={byMemo ? "memo" : "description"}
           id={`pattern-${uid}`}
           value={pattern}
           onChange={setPattern}
-          groupKey={group.key}
+          subject={byMemo && group.memo !== null ? group.memo : group.key}
+          basis={byMemo ? "memo" : "description"}
           direction={group.direction}
         />
       ) : null}
@@ -513,20 +522,24 @@ function PatternEditor({
   id,
   value,
   onChange,
-  groupKey,
+  subject,
+  basis,
   direction,
 }: {
   id: string;
   value: string;
   onChange: (value: string) => void;
-  groupKey: string;
+  /** 패턴이 맞아야 하는 지금 묶음의 글자 — 적요, 또는 메모 기준이면 메모. */
+  subject: string;
+  basis: "description" | "memo";
   direction: Direction;
 }) {
+  const target = basis === "memo" ? "메모" : "적요";
   const parsed = parseWildcardPattern(value);
   const localError = !parsed.ok
     ? (PATTERN_ERROR_TEXT[parsed.code] ?? "패턴 형식이 올바르지 않습니다.")
-    : !wildcardMatches(compileWildcard(parsed.pattern), groupKey)
-      ? "이 패턴이 지금 고른 적요와 맞지 않습니다."
+    : !wildcardMatches(compileWildcard(parsed.pattern), subject)
+      ? `이 패턴이 지금 고른 ${target}와 맞지 않습니다.`
       : null;
   const [preview, setPreview] = useState<{ pattern: string; data: Preview | null; failed: boolean } | null>(null);
 
@@ -541,7 +554,7 @@ function PatternEditor({
         const response = await fetch("/api/classify/patterns/preview", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pattern: wanted, key: groupKey }),
+          body: JSON.stringify({ pattern: wanted, key: subject, basis }),
           cache: "no-store",
           signal: controller.signal,
         });
@@ -556,7 +569,7 @@ function PatternEditor({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [wanted, groupKey]);
+  }, [wanted, subject, basis]);
 
   const current = preview !== null && wanted !== null && preview.pattern === wanted ? preview : null;
 
@@ -597,7 +610,7 @@ function PatternEditor({
           <span className="font-medium text-fg tabular-nums">
             {DIRECTION_TEXT[direction]} {current.data[direction].count}건 일치
           </span>
-          <span className="tabular-nums">적요 {current.data[direction].distinct}종</span>
+          <span className="tabular-nums">{target} {current.data[direction].distinct}종</span>
           {current.data[direction].manual > 0 ? (
             <span className="tabular-nums" title="이번만으로 고른 거래는 바꾸지 않음">
               이번만 {current.data[direction].manual}건 제외
@@ -634,6 +647,7 @@ export function PatternRow({ saved, categories }: { saved: SavedPattern; categor
         action: "update",
         pattern: saved.pattern,
         direction: saved.direction,
+        basis: saved.basis,
         category,
         item: item === "" ? null : item,
       });
@@ -659,6 +673,7 @@ export function PatternRow({ saved, categories }: { saved: SavedPattern; categor
         action: "delete",
         pattern: saved.pattern,
         direction: saved.direction,
+        basis: saved.basis,
       });
       if (!ok) {
         setStatus({ kind: "error", text: failureText(data) });
@@ -682,6 +697,11 @@ export function PatternRow({ saved, categories }: { saved: SavedPattern; categor
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="font-medium break-all">
           <DirectionBadge direction={saved.direction} />
+          {saved.basis === "memo" ? (
+            <span data-testid="pattern-basis" className="mr-1 text-xs font-normal text-muted">
+              메모
+            </span>
+          ) : null}
           <code>{saved.pattern}</code>
         </p>
         <p className="text-xs text-muted">

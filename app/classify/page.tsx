@@ -231,7 +231,7 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
           title="패턴"
           testId="patterns"
           items={loaded.patterns}
-          keyOf={(saved) => `${saved.direction}\u001f${saved.pattern}`}
+          keyOf={(saved) => `${saved.basis}\u001f${saved.direction}\u001f${saved.pattern}`}
           render={(saved) => <PatternRow saved={saved} categories={categories} />}
         />
         <RuleSection
