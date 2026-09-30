@@ -55,6 +55,7 @@ function fakeClient(rows) {
       if (text.includes('FROM merchant_map')) return { rows: [] };
       if (text.includes('FROM memo_map')) return { rows: [] };
       if (text.includes('FROM description_patterns')) return { rows: [] };
+      if (text.includes('FROM memo_patterns')) return { rows: [] };
 
       if (text.includes('FROM transactions')) {
         const [cursor, yearMonth, limit] = values;

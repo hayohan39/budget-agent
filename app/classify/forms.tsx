@@ -40,6 +40,8 @@ export type ClassifyGroup = {
 export type SavedPattern = {
   pattern: string;
   direction: MappingDirection;
+  /** 패턴이 거는 대상. 적요(description_patterns) 또는 메모(memo_patterns). */
+  basis: "description" | "memo";
   category: string;
   item: string | null;
   updatedAt: string;
@@ -250,9 +252,13 @@ export function GroupForm({
   // ‘앞으로도’ 의 기준. 메모가 있는 묶음에서만 메모를 고를 수 있다.
   const [basis, setBasis] = useState<"description" | "memo">("description");
   const byMemo = scope === "always" && basis === "memo" && group.memo !== null;
-  // 적요 패턴으로 저장(앞으로도에서만). 입력칸은 적요에서 만든 제안으로 미리 채운다.
+  // 패턴으로 저장(앞으로도에서만). 적요 기준이면 적요 패턴, 메모 기준이면 메모 패턴(2026-09)이고
+  // 입력칸은 각각 적요 · 메모에서 만든 제안으로 미리 채운다. 기준을 바꿔도 입력한 값은 따로 남는다.
   const [usePattern, setUsePattern] = useState(false);
-  const [pattern, setPattern] = useState(() => suggestPattern(group.key));
+  const [descriptionPattern, setDescriptionPattern] = useState(() => suggestPattern(group.key));
+  const [memoPattern, setMemoPattern] = useState(() => (group.memo === null ? "" : suggestPattern(group.memo)));
+  const pattern = byMemo ? memoPattern : descriptionPattern;
+  const setPattern = byMemo ? setMemoPattern : setDescriptionPattern;
   const [status, setStatus] = useState<Status>({ kind: "idle" });
 
   // id 에 적요를 넣지 않는다(DOM id 에 한글·공백이 섞이면 label 연결이 깨진다).
@@ -279,8 +285,8 @@ export function GroupForm({
         item,
         // '이번만'에서는 뜻이 없다(JSON.stringify 가 undefined 키를 뺀다).
         // 패턴은 '앞으로도' 에서만 보낸다. 서버가 같은 규칙으로 다시 검사하고, 지금 고른
-        // 적요와 맞는지도 서버가 확인한다.
-        pattern: scope === "always" && usePattern && !byMemo ? pattern : undefined,
+        // 적요(메모 기준이면 메모)와 맞는지도 서버가 확인한다.
+        pattern: scope === "always" && usePattern ? pattern : undefined,
       });
       if (!ok) {
         setCollapsed(false);
@@ -441,7 +447,7 @@ export function GroupForm({
             </label>
           </fieldset>
         ) : null}
-        {scope === "always" && !byMemo ? (
+        {scope === "always" ? (
           <label className="flex items-center gap-1 text-xs text-muted">
             <input type="checkbox" checked={usePattern} onChange={(event) => setUsePattern(event.target.checked)} />
             달마다 바뀌는 부분이 있어요 — 패턴으로 저장
@@ -451,19 +457,22 @@ export function GroupForm({
           {status.kind === "busy" ? "저장 중…" : "적용"}
         </button>
       </div>
-      {byMemo ? (
+      {byMemo && !usePattern ? (
         <p className="text-xs text-muted">
           메모가 <strong>{group.memo}</strong> 인 {DIRECTION_TEXT[group.direction]} 거래라면 적요 · 계좌 · 달과
           무관하게 이 분류를 붙입니다(‘이번만’으로 고른 거래는 그대로). 메모 기준 매핑은 적요 기준 매핑보다 먼저
           걸립니다.
         </p>
       ) : null}
-      {scope === "always" && usePattern && !byMemo ? (
+      {scope === "always" && usePattern ? (
         <PatternEditor
+          // 기준이 바뀌면 미리보기 상태를 새로 시작한다.
+          key={byMemo ? "memo" : "description"}
           id={`pattern-${uid}`}
           value={pattern}
           onChange={setPattern}
-          groupKey={group.key}
+          subject={byMemo && group.memo !== null ? group.memo : group.key}
+          basis={byMemo ? "memo" : "description"}
           direction={group.direction}
         />
       ) : null}
@@ -496,20 +505,24 @@ function PatternEditor({
   id,
   value,
   onChange,
-  groupKey,
+  subject,
+  basis,
   direction,
 }: {
   id: string;
   value: string;
   onChange: (value: string) => void;
-  groupKey: string;
+  /** 패턴이 맞아야 하는 지금 묶음의 글자 — 적요, 또는 메모 기준이면 메모. */
+  subject: string;
+  basis: "description" | "memo";
   direction: Direction;
 }) {
+  const target = basis === "memo" ? "메모" : "적요";
   const parsed = parseWildcardPattern(value);
   const localError = !parsed.ok
     ? (PATTERN_ERROR_TEXT[parsed.code] ?? "패턴 형식이 올바르지 않습니다.")
-    : !wildcardMatches(compileWildcard(parsed.pattern), groupKey)
-      ? "이 패턴이 지금 고른 적요와 맞지 않습니다."
+    : !wildcardMatches(compileWildcard(parsed.pattern), subject)
+      ? `이 패턴이 지금 고른 ${target}와 맞지 않습니다.`
       : null;
   const [preview, setPreview] = useState<{ pattern: string; data: Preview | null; failed: boolean } | null>(null);
 
@@ -524,7 +537,7 @@ function PatternEditor({
         const response = await fetch("/api/classify/patterns/preview", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pattern: wanted, key: groupKey }),
+          body: JSON.stringify({ pattern: wanted, key: subject, basis }),
           cache: "no-store",
           signal: controller.signal,
         });
@@ -539,7 +552,7 @@ function PatternEditor({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [wanted, groupKey]);
+  }, [wanted, subject, basis]);
 
   const current = preview !== null && wanted !== null && preview.pattern === wanted ? preview : null;
   const other: Direction = direction === "out" ? "in" : "out";
@@ -562,7 +575,16 @@ function PatternEditor({
       </div>
       <p className="text-muted">
         <code>#</code> 는 숫자 한 자리, <code>*</code> 는 아무 글자 여러 개(없어도 됨)입니다. 나머지는 글자 그대로
-        비교하고, 적요 전체와 맞아야 합니다. 예: 흥국01184 · 흥국02184 → <code>흥국##184</code>
+        비교하고, {target} 전체와 맞아야 합니다.{" "}
+        {basis === "memo" ? (
+          <>
+            예: 길동 IRP 01회 · 길동 IRP 02회 → <code>길동 IRP ##회</code>
+          </>
+        ) : (
+          <>
+            예: 흥국01184 · 흥국02184 → <code>흥국##184</code>
+          </>
+        )}
       </p>
       {localError !== null ? (
         <p role="alert" className="text-danger">
@@ -576,7 +598,7 @@ function PatternEditor({
         <div data-testid="pattern-preview" className="text-muted">
           <p>
             이미 올린 거래 중 이 패턴에 맞는 <strong>{DIRECTION_TEXT[direction]}</strong>{" "}
-            {current.data[direction].count}건(서로 다른 적요 {current.data[direction].distinct}개)
+            {current.data[direction].count}건(서로 다른 {target} {current.data[direction].distinct}개)
             {current.data[direction].manual > 0
               ? ` — 그중 ‘이번만’으로 고른 ${current.data[direction].manual}건은 바꾸지 않습니다`
               : ""}
@@ -614,6 +636,7 @@ export function PatternRow({ saved, categories }: { saved: SavedPattern; categor
         action: "update",
         pattern: saved.pattern,
         direction: saved.direction,
+        basis: saved.basis,
         category,
         item: item === "" ? null : item,
       });
@@ -639,6 +662,7 @@ export function PatternRow({ saved, categories }: { saved: SavedPattern; categor
         action: "delete",
         pattern: saved.pattern,
         direction: saved.direction,
+        basis: saved.basis,
       });
       if (!ok) {
         setStatus({ kind: "error", text: failureText(data) });
@@ -662,6 +686,11 @@ export function PatternRow({ saved, categories }: { saved: SavedPattern; categor
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="font-medium break-all">
           <DirectionBadge direction={saved.direction} />
+          {saved.basis === "memo" ? (
+            <span data-testid="pattern-basis" className="mr-1 text-xs font-normal text-muted">
+              메모
+            </span>
+          ) : null}
           <code>{saved.pattern}</code>
         </p>
         <p className="text-xs text-muted">
