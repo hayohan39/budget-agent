@@ -80,6 +80,15 @@ function MonthBadge({ month }: { month: string }) {
   );
 }
 
+/** 거래 한 건 모드의 날짜(`M/D`). */
+function DayBadge({ day }: { day: string }) {
+  return (
+    <span data-testid="group-day" className="mr-2 inline-block align-middle text-xs font-normal text-muted tabular-nums">
+      {day}
+    </span>
+  );
+}
+
 /** 묶음 이름 아래의 메모 — 작은 회색 글씨(report 의 항목 줄과 같은 모양). */
 function GroupMemo({ memo }: { memo: string | null }) {
   if (memo === null) return null;
@@ -246,6 +255,8 @@ export function GroupForm({
   categories,
   hideOnApply = false,
   showMonth = false,
+  txn,
+  day = null,
 }: {
   month: string;
   group: ClassifyGroup;
@@ -253,6 +264,14 @@ export function GroupForm({
   hideOnApply?: boolean;
   /** 전체 기간 보기: 묶음이 속한 달을 이름 앞에 붙인다(이번만이 그 달에만 적용된다). */
   showMonth?: boolean;
+  /**
+   * 거래 한 건 모드(/report 미분류 섹션, 2026-09 "개별항목 모두 보여지게"). 주면 '이번만' 이
+   * 이 거래 하나에만 걸린다(서버가 그 거래가 이 묶음에 있는지 다시 본다). '앞으로도' 는 예전처럼
+   * 같은 적요(메모) 전부다. 건수는 그리지 않는다.
+   */
+  txn?: string;
+  /** 거래 한 건 모드의 날짜(`M/D`). */
+  day?: string | null;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -306,6 +325,8 @@ export function GroupForm({
         // 패턴은 '앞으로도' 에서만 보낸다. 서버가 같은 규칙으로 다시 검사하고, 지금 고른
         // 적요(메모 기준이면 메모)와 맞는지도 서버가 확인한다.
         pattern: scope === "always" && usePattern ? pattern : undefined,
+        // 거래 한 건 모드의 '이번만' 은 그 거래 하나만. '앞으로도' 에는 싣지 않는다(서버가 거부한다).
+        txn: txn !== undefined && scope === "once" ? txn : undefined,
       });
       if (!ok) {
         setCollapsed(false);
@@ -314,7 +335,11 @@ export function GroupForm({
       }
       setStatus({
         kind: "done",
-        text: `${String(data.updated ?? 0)}건에 적용했습니다${data.mapped === true ? " · 매핑 저장" : ""}.`,
+        // 거래 한 건 모드의 '이번만' 은 늘 그 한 건이라 건수를 붙이지 않는다.
+        text:
+          txn !== undefined && scope === "once"
+            ? "적용했습니다."
+            : `${String(data.updated ?? 0)}건에 적용했습니다${data.mapped === true ? " · 매핑 저장" : ""}.`,
       });
       startTransition(() => router.refresh());
     } catch {
@@ -343,6 +368,7 @@ export function GroupForm({
       >
         <span className="break-all">
           {showMonth ? <MonthBadge month={month} /> : null}
+          {day !== null ? <DayBadge day={day} /> : null}
           <AccountBadge account={group.account} />
           <DirectionBadge direction={group.direction} />
           {group.key}
@@ -364,13 +390,15 @@ export function GroupForm({
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="font-medium break-all">
           {showMonth ? <MonthBadge month={month} /> : null}
+          {day !== null ? <DayBadge day={day} /> : null}
           <AccountBadge account={group.account} />
           <DirectionBadge direction={group.direction} />
           {group.key}
           <GroupMemo memo={group.memo} />
         </p>
         <p className="tabular-nums text-muted">
-          {group.count}건 · {FLOW.format(group.total)}원
+          {txn === undefined ? `${group.count}건 · ` : ""}
+          {FLOW.format(group.total)}원
         </p>
       </div>
       <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted" data-testid="group-meta">

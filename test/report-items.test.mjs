@@ -2,7 +2,8 @@
 //
 // 지키는 것
 //   1. 항목 줄의 합 = 그 섹션의 합계(건수도). 섹션 합계 · 실현순증감 · 검산은
-//      항목 줄이 생기기 전과 같다.
+//      항목 줄이 생기기 전과 같다. 2026-09 부터 항목 줄은 **거래 한 건**이다(합산하지
+//      않는다) — 그래도 합계 · 검산 숫자는 합산하던 때와 똑같다(아래 fixture 값).
 //   2. /classify 가 고를 수 있는 분류(CLASSIFY_CATEGORIES)는 부호와 무관하게
 //      전부 집계의 명시적인 칸에 들어간다. "어느 칸에도 없는 분류" 갈래로
 //      떨어지는 것이 하나도 없다.
@@ -70,17 +71,25 @@ function sum(lines, field = 'total') {
   return lines.reduce((total, line) => total + line[field], 0);
 }
 
-/** 항목 줄 하나 안에서 부호가 섞이지 않는다 — 방향이 줄의 키다. */
+/**
+ * 항목 줄 = 거래 한 건. 줄마다 방향과 부호가 맞고, 같은 거래가 두 줄에 나오지 않으며,
+ * 줄은 날짜순(같은 시각이면 id 내림차순)이다.
+ */
 function assertNoNetting(lines, label) {
   const seen = new Set();
   for (const line of lines) {
     assert.ok(line.direction === 'in' || line.direction === 'out', `${label} 방향`);
     if (line.direction === 'in') assert.ok(line.total > 0, `${label} ${line.item} 입금 줄은 +`);
     else assert.ok(line.total <= 0, `${label} ${line.item} 출금 줄은 −`);
-    const key = JSON.stringify([line.category, line.item, line.direction]);
-    assert.ok(!seen.has(key), `${label} ${line.item} 줄이 겹친다`);
-    seen.add(key);
+    assert.equal(line.count, 1, `${label} ${line.item} 한 줄 = 한 건`);
+    assert.ok(!seen.has(line.id), `${label} ${line.item} 같은 거래가 두 줄에 나온다`);
+    seen.add(line.id);
   }
+  const days = lines.map((line) => line.day).filter((day) => day !== null).map((day) => {
+    const [month, date] = day.split('/').map(Number);
+    return month * 100 + date;
+  });
+  assert.deepEqual(days, [...days].sort((a, b) => a - b), `${label} 날짜순`);
 }
 
 /** 항목 줄 합계 = 섹션 합계. 모든 섹션 · 모든 분류 · 모든 계좌 블록에 대해. */
@@ -144,50 +153,85 @@ test('fixture: 항목 줄의 합이 섹션 합계와 같고 검산은 그대로 
   assert.equal(verification.actual, -441865);
 });
 
-test('fixture: 저축 · 용돈 · 주거비가 적요별 항목 줄로 풀린다', () => {
+test('fixture: 저축 · 용돈 · 주거비가 거래 한 건씩 날짜순 줄로 풀린다', () => {
   const result = aggregateMonthly({ yearMonth: '2026-08', accounts: ACCOUNTS, rows: fixtureRows() });
   const lines = (category) =>
     result.항목별.고정지출1
       .filter((line) => line.category === category)
-      .map((line) => [line.item, line.total, line.count]);
+      .map((line) => [line.day, line.item, line.total]);
 
+  // 같은 날(같은 초)의 거래는 파일 순서(id 내림차순 = 더 과거가 먼저)다.
   assert.deepEqual(lines('저축'), [
-    ['김철수 ISA', -1000000, 1],
-    ['홍길동 ISA', -1000000, 1],
-    ['철수 연금저축', -500000, 1],
-    ['길동 IRP', -350000, 1],
-    ['김철수 IRP', -300000, 1],
-    ['코인적립', -200000, 1],
+    ['8/3', '길동 IRP', -350000],
+    ['8/3', '홍길동 ISA', -1000000],
+    ['8/3', '김철수 ISA', -1000000],
+    ['8/3', '철수 연금저축', -500000],
+    ['8/3', '김철수 IRP', -300000],
+    ['8/5', '코인적립', -200000],
   ]);
   assert.deepEqual(lines('용돈'), [
-    ['길동 용돈', -500000, 1],
-    ['철수 용돈', -500000, 1],
+    ['8/2', '철수 용돈', -500000],
+    ['8/2', '길동 용돈', -500000],
   ]);
-  assert.deepEqual(lines('주거비'), [['대출 이자', -800000, 1]]);
+  assert.deepEqual(lines('주거비'), [['8/4', '대출 이자', -800000]]);
 
-  // 카드대금은 카드사 이름이 항목이다(적요 표기가 달라도 모인다).
+  // 카드대금은 카드사 이름이 항목이다(적요 표기가 달라도 같은 이름). 2026-09 부터 카드사별로
+  // 더하지 않고 **출금 한 건이 한 줄**이다 — 삼성카드 두 건이 따로 보인다.
   assert.deepEqual(
-    result.항목별.카드비.map((line) => [line.item, line.count]),
+    result.항목별.카드비.map((line) => [line.day, line.item, line.total]),
     [
-      ['삼성카드', 2],
-      ['현대카드', 1],
-      ['KB국민카드', 1],
+      ['8/12', '현대카드', -1901314],
+      ['8/14', '삼성카드', -317012],
+      ['8/14', 'KB국민카드', -14050],
+      ['8/21', '삼성카드', -2858322],
     ],
   );
-  // 미분류 출금은 변동비에 미분류 꼬리표로, 적요가 항목이다.
+  // 카드사 묶음(`카드비.issuers`)은 데이터에 그대로 있다 — 합계는 같다.
   assert.deepEqual(
-    result.항목별.변동비
-      .filter((line) => line.direction === 'out' && line.total !== 0)
-      .map((line) => [line.category, line.item, line.total]),
+    result.카드비.issuers.map((issuer) => [issuer.issuer, issuer.total]),
     [
-      ['미분류', '김철수', -170000],
-      ['미분류', '이영희', -7500],
-      ['미분류', '코웨이08월렌탈', -3780],
+      ['삼성카드', -3175334],
+      ['현대카드', -1901314],
+      ['KB국민카드', -14050],
+    ],
+  );
+  // 미분류는 변동비에 미분류 꼬리표로, 적요가 항목이다. 같은 적요(김철수)라도 거래마다 한 줄이고,
+  // 메모는 그 거래의 메모 하나다.
+  assert.deepEqual(
+    result.항목별.변동비.map((line) => [line.day, line.category, line.item, line.total, line.memo]),
+    [
+      ['8/1', '미분류', '김철수', 1000000, '곰돌이 휴가비'],
+      ['8/5', '미분류', '김철수', -170000, '경주 숙박비'],
+      ['8/14', '미분류', '김철수', 3500000, '곰돌이 월급'],
+      ['8/16', '미분류', '이영희', -7500, null],
+      ['8/20', '미분류', '코웨이08월렌탈', -3780, null],
+      ['8/25', '미분류', '전자카드비', 1045850, null],
+      ['8/29', '미분류', '홍길동', 5900000, null],
+      ['8/30', '미분류', '김철수', 34000, null],
     ],
   );
 });
 
-test('저장된 항목이 적요를 이긴다 — 다른 적요도 같은 항목이면 한 줄이 된다', () => {
+test('항목 줄의 날짜는 실행 환경의 시간대와 무관하게 한국 시각이다', () => {
+  // UTC 로는 8/31 15:30 이지만 한국 시각으로는 9/1 00:30 이다.
+  const result = aggregateMonthly({
+    yearMonth: '2026-09',
+    accounts: ACCOUNTS,
+    rows: [
+      { id: '1', account_id: 1, txn_at: '2026-09-01T00:30:00+09:00', description: '가상가게', amount: '-100', category: VARIABLE_CATEGORY },
+      { id: '2', account_id: 1, txn_at: new Date('2026-09-30T23:59:59+09:00'), description: '가상가게', amount: '-200', category: VARIABLE_CATEGORY },
+    ],
+  });
+  assert.deepEqual(
+    result.항목별.변동비.map((line) => [line.id, line.day, line.total]),
+    [
+      ['1', '9/1', -100],
+      ['2', '9/30', -200],
+    ],
+  );
+});
+
+test('저장된 항목이 적요를 이긴다 — 다른 적요도 같은 항목 이름으로 보이되 합산하지 않는다', () => {
   const rows = fixtureRows((record) =>
     record.description === '김철수 ISA' || record.description === '홍길동 ISA'
       ? { item: 'ISA' }
@@ -198,16 +242,11 @@ test('저장된 항목이 적요를 이긴다 — 다른 적요도 같은 항목
   const result = aggregateMonthly({ yearMonth: '2026-08', accounts: ACCOUNTS, rows });
   assertLinesAddUp(result);
 
-  const isa = result.항목별.고정지출1.find((line) => line.item === 'ISA');
-  assert.deepEqual(isa, {
-    category: '저축',
-    item: 'ISA',
-    direction: 'out',
-    total: -2000000,
-    count: 2,
-    memos: [],
-    memoCount: 0,
-  });
+  const isa = result.항목별.고정지출1.filter((line) => line.item === 'ISA');
+  assert.deepEqual(isa, [
+    { id: '17', day: '8/3', category: '저축', item: 'ISA', direction: 'out', total: -1000000, count: 1, memo: null },
+    { id: '16', day: '8/3', category: '저축', item: 'ISA', direction: 'out', total: -1000000, count: 1, memo: null },
+  ]);
   // 카드대금에 항목을 정하면 카드사 묶음도 그 이름으로 간다.
   assert.ok(result.카드비.issuers.some((issuer) => issuer.issuer === '생활비카드'));
   assert.equal(result.종합정산.실현순증감, -441865);
@@ -224,10 +263,12 @@ test('같은 적요 · 같은 항목의 입금과 출금은 서로 다른 줄이
 
   const kim = result.항목별.수입
     .filter((line) => line.item === '철수')
-    .map((line) => [line.direction, line.total, line.count]);
+    .map((line) => [line.direction, line.total]);
   assert.deepEqual(kim, [
-    ['in', 4534000, 3],
-    ['out', -170000, 1],
+    ['in', 1000000],
+    ['out', -170000],
+    ['in', 3500000],
+    ['in', 34000],
   ]);
 
   // 분류 단위 합계 · 섹션 합계 · 실현순증감 · 검산은 방향으로 나누기 전과 같다.
@@ -248,8 +289,10 @@ test('미분류는 방향과 무관하게 변동비에 보이고, 입금 줄과 
   assert.deepEqual(
     kim.map((line) => [line.category, line.direction, line.total]),
     [
-      ['미분류', 'in', 4534000],
+      ['미분류', 'in', 1000000],
       ['미분류', 'out', -170000],
+      ['미분류', 'in', 3500000],
+      ['미분류', 'in', 34000],
     ],
   );
   // 수입 섹션에는 미분류 줄이 없다.
@@ -395,11 +438,13 @@ test('변동비: 입금은 일회성 수입, 출금은 일회성 지출 — 둘 
   assert.deepEqual(
     result.항목별.변동비
       .filter((line) => line.category === VARIABLE_CATEGORY)
-      .map((line) => [line.item, line.direction, line.total, line.count]),
+      .map((line) => [line.item, line.direction, line.total]),
     [
-      ['김철수', 'in', 4534000, 3],
-      ['김철수', 'out', -170000, 1],
-      ['이영희', 'out', -7500, 1],
+      ['김철수', 'in', 1000000],
+      ['김철수', 'out', -170000],
+      ['김철수', 'in', 3500000],
+      ['이영희', 'out', -7500],
+      ['김철수', 'in', 34000],
     ],
   );
   // 입금은 수입 섹션으로 가지 않는다.
