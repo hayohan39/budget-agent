@@ -95,15 +95,15 @@ export function VoidPanel({
   }
 
   return (
-    <section className="flex flex-col gap-3" data-testid="void-panel" aria-labelledby="void-title">
-      <h2 id="void-title" className="text-[13px] font-semibold text-fg">
-        무효 처리(상쇄)
+    <section className="flex flex-col gap-3" data-testid="void-panel" data-month={yearMonth} aria-labelledby="void-title">
+      <h2 id="void-title" className="flex items-center gap-2 text-[13px] font-semibold text-fg">
+        무효 처리
+        {voided.length > 0 ? (
+          <span className="rounded border border-line bg-subtle px-1.5 text-xs font-medium text-muted tabular-nums">
+            {voided.length}쌍
+          </span>
+        ) : null}
       </h2>
-      <p className="text-xs text-muted">
-        출금됐다가 거부 · 반환되어 같은 금액이 다시 들어온 경우처럼, 두 거래를 <strong>없던 일</strong>로 볼 수
-        있습니다. 무효로 표시한 두 거래는 수입 · 지출 · 미분류 · 통계에서 빠지고 여기에만 남습니다(언제든 해제).
-        같은 계좌 · 같은 금액 · 반대 방향의 거래만 짝지을 수 있고, 저절로 무효가 되는 거래는 없습니다.
-      </p>
       {message !== null ? (
         <p
           role={message.kind === "error" ? "alert" : "status"}
@@ -122,7 +122,10 @@ export function VoidPanel({
               className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-dashed border-line-strong p-2.5 text-[13px]"
             >
               <div className="min-w-0 flex-1">
-                <span className="mr-2 text-xs text-muted">{pair.account.nickname} · 무효</span>
+                <span className="mr-2 text-xs text-muted">
+                  {pair.account.nickname}
+                  <span className="ml-1.5 rounded border border-line-strong bg-subtle px-1 text-soft">무효</span>
+                </span>
                 <Leg leg={pair.out} struck />
                 <Leg leg={pair.in} struck />
               </div>
@@ -139,11 +142,16 @@ export function VoidPanel({
         </ul>
       ) : null}
 
-      <h3 className="text-xs font-medium text-muted">
-        {yearMonth} 후보 — 같은 날(한국 시각) 같은 계좌에서 금액이 같고 방향이 반대인 두 거래
+      <h3
+        className="text-xs font-medium text-muted"
+        title="같은 날(한국 시각) · 같은 계좌 · 같은 금액 · 반대 방향"
+      >
+        후보
+        <span className="ml-1.5 tabular-nums">{candidates.length}</span>
+        <span className="sr-only"> (같은 날 · 같은 계좌 · 같은 금액 · 반대 방향)</span>
       </h3>
       {candidates.length === 0 ? (
-        <p className="text-xs text-muted">후보가 없습니다.</p>
+        <p className="text-xs text-muted">후보 없음</p>
       ) : (
         <ul className="flex flex-col gap-2" data-testid="void-candidates">
           {candidates.map((candidate) => {

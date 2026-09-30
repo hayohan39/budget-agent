@@ -8,6 +8,13 @@
 //   중: 고정비 계좌 · 비상금 계좌        (입금 / 집행 / 이자 / 잔액)
 //   우: 카드비(카드사별) · 변동비(일회성 수입 · 지출) · 종합정산 · 메인 계좌 잔액
 //
+// 2026-09(사용자 요청: "계좌별(메인, 고정비, 비상금)로 펼치기/숨기기 … 기본값은 숨기기"):
+// 위 세 열 그룹은 이제 **계좌별 접이식 섹션**(메인 · 고정비 · 비상금, 기본 접힘) 안에 있다.
+// 메인 섹션 안에 좌 · 우 그룹이, 고정비 · 비상금 섹션 안에 각 계좌 표가 들어간다.
+// 접힌 머리에도 그 계좌의 핵심 숫자(순증감 · 잔액 등)가 보인다. 종합정산과 계좌별 잔액
+// 변화는 늘 펼쳐 둔다. 같은 달 설명 문단들은 걷어 내고 짧은 꼬리표 · 상태 표시로 바꿨다
+// ("설명을 위한 글들은 제거해줘 … UI를 직관적으로").
+//
 // 원본의 `변동비` 표는 2026-09 에 둘로 나눴다(사용자 요청). `카드비` 에는 카드대금만,
 // `변동비` 에는 일회성 항목(입금 · 출금 모두)과 **아직 분류하지 않은 행**이 온다.
 //
@@ -25,10 +32,10 @@
 // 필요 없다"). 값을 넣는 화면이 한 번도 없어 늘 0 이었다. 종합정산의 합계는
 // 곧 실현순증감이고, 검산은 원래부터 그 값으로 한다(lib/report/verify.mjs).
 //
-// 가운데 열의 계좌 표(고정비 · 비상금)는 머리에 **`고정비 계좌` · `비상금 계좌`**
-// 줄을 단다. 왼쪽 열에도 메인 계좌에서 바로 나간 `고정비` 분류 표가 있을 수 있어,
-// 머리 없이는 '고정비' 표가 두 개로 보였다(사용자 보고). 메인 계좌 표에는 머리를
-// 달지 않는다(사용자 요청).
+// 계좌 표(고정비 · 비상금)는 `고정비 계좌` · `비상금 계좌` 섹션 머리 아래에 있다. 메인
+// 계좌에서 바로 나간 `고정비` 분류 표도 있을 수 있어(메인 섹션 안), 계좌 이름 머리 없이는
+// '고정비' 표가 두 개로 보였다(사용자 보고). 예전에는 메인 계좌 표에 머리를 달지 않았지만
+// (사용자 요청) 2026-09 계좌별 접기 요청으로 메인도 `메인 계좌` 섹션 머리를 갖는다.
 //
 // ── 부호 ──────────────────────────────────────────────────────────────────
 //
@@ -47,8 +54,6 @@
 // 정규화한 **적요 그대로**가 항목 이름이다(카드대금은 카드사). 즉 이 화면에
 // 적요가 나온다 — 사용자가 요청한 변경이다(PLAN.md "적요 표시 원칙 변경").
 // 로그인 + 화이트리스트 뒤의 동적 페이지에만 그려진다.
-import Link from "next/link";
-
 import type { aggregateMonthly } from "@/lib/report/monthly.mjs";
 import type { verifyMonthlyReport } from "@/lib/report/verify.mjs";
 
@@ -157,28 +162,29 @@ const VERIFY_REASON_TEXT: Record<string, string> = {
  * 문장을 쓰면 고정비 줄에 "메인 계좌 거래가 없습니다" 가 찍힌다.
  */
 const BALANCE_REASON_TEXT: Record<string, string> = {
-  noRows: "이 달 거래가 없습니다",
-  balanceMissing: "이 달 거래의 거래 후 잔액이 모두 비어 있습니다",
+  noRows: "거래 없음",
+  balanceMissing: "잔액 칸 비어 있음",
 };
 
 /**
- * 경계 거래의 잔액 칸이 비어 가까운 잔액에서 금액으로 이어 계산(역산)했을 때 붙이는 말
+ * 경계 거래의 잔액 칸이 비어 가까운 잔액에서 금액으로 이어 계산(역산)했는가
  * (lib/report/monthly.mjs 의 balanceSpan). 토스 명세서는 잔액 0원이던 계좌에 들어온
  * 입금의 잔액 칸을 비워 둔다 — 0원에서 시작한 계좌의 첫 달이 이렇다.
+ * 화면에는 `역산` 꼬리표 하나로 보이고, 어느 쪽인지는 꼬리표의 힌트에 있다.
  */
-function inferredBalanceNote(
+function inferredBalanceHint(
   entry: { inferredOpening?: boolean; inferredClosing?: boolean } | undefined,
 ): string | undefined {
   if (entry === undefined) return undefined;
-  if (entry.inferredOpening && entry.inferredClosing) return "첫 · 마지막 거래 잔액 역산";
-  if (entry.inferredOpening) return "첫 거래 잔액 역산";
-  if (entry.inferredClosing) return "마지막 거래 잔액 역산";
+  if (entry.inferredOpening && entry.inferredClosing) return "첫 · 마지막 거래 잔액을 금액으로 이어 계산";
+  if (entry.inferredOpening) return "첫 거래 잔액을 금액으로 이어 계산";
+  if (entry.inferredClosing) return "마지막 거래 잔액을 금액으로 이어 계산";
   return undefined;
 }
 
 function reasonText(table: Record<string, string>, reason: string | null): string {
-  if (reason === null) return "사유를 알 수 없습니다";
-  return table[reason] ?? `사유를 알 수 없습니다 (${reason.slice(0, 64)})`;
+  if (reason === null) return "사유 모름";
+  return table[reason] ?? `사유 모름 (${reason.slice(0, 64)})`;
 }
 
 function verifyReasonText(reason: string | null): string {
@@ -214,10 +220,46 @@ const TONE: Record<string, string> = {
   plain: "[&>*]:font-semibold!",
 };
 
+/** 미분류 목록(아래 `미분류` 섹션)의 앵커. app/report/unclassified-section.tsx 와 같은 값. */
+export const UNCLASSIFIED_ANCHOR = "unclassified";
+
 /** 금액 칸의 글자. 음수만 색을 달리한다(부호는 글자에도 그대로 있다 — 색만으로 구분하지 않는다). */
 function Amount({ value, format = flow }: { value: number | null | undefined; format?: (value: number | null | undefined) => string }) {
   const negative = typeof value === "number" && value < 0;
   return <span className={negative ? "text-neg" : undefined}>{format(value)}</span>;
+}
+
+const TAG_TONE = {
+  neutral: "border-line bg-subtle text-muted",
+  warn: "border-warn-line bg-warn-bg text-warn",
+  accent: "border-line bg-accent-bg text-accent-text",
+} as const;
+
+/**
+ * 짧은 꼬리표(2026-09: 설명 문장을 걷어 내고 그 자리에 둔다). `hint` 는 마우스를 올리면
+ * 보이고(title), 화면 읽기 프로그램에는 괄호 안 글로 읽힌다.
+ */
+function Tag({
+  children,
+  hint,
+  tone = "neutral",
+  testId,
+}: {
+  children: React.ReactNode;
+  hint?: string;
+  tone?: keyof typeof TAG_TONE;
+  testId?: string;
+}) {
+  return (
+    <span
+      title={hint}
+      data-testid={testId}
+      className={`ml-1.5 inline-block rounded border px-1 align-baseline text-xs font-normal whitespace-nowrap ${TAG_TONE[tone]}`}
+    >
+      {children}
+      {hint !== undefined ? <span className="sr-only"> ({hint})</span> : null}
+    </span>
+  );
 }
 
 function Frame({ children }: { children: React.ReactNode }) {
@@ -246,24 +288,41 @@ function WideRow({
   label,
   value,
   tone,
-  note,
+  tags,
+  hint,
 }: {
   label: string;
   value: React.ReactNode;
   tone?: keyof typeof TONE;
-  note?: string;
+  tags?: React.ReactNode;
+  /** 줄 이름에 마우스를 올리면 보이는 짧은 식(예: 순증감). */
+  hint?: string;
 }) {
   return (
     <tr className={tone === undefined ? undefined : TONE[tone]}>
       <th scope="row" colSpan={2} className={`${CELL} text-left font-normal`}>
-        {label}
-        {note !== undefined ? (
-          <span className="ml-1.5 text-xs font-normal text-muted">{note}</span>
-        ) : null}
+        <span title={hint}>{label}</span>
+        {tags}
       </th>
       <td className={NUM}>{value}</td>
     </tr>
   );
+}
+
+/** 항목 줄의 꼬리표. `미분류` 는 아래 미분류 목록으로 가는 링크다. */
+function CategoryTag({ tag }: { tag: string }) {
+  if (tag === "미분류") {
+    return (
+      <a
+        href={`#${UNCLASSIFIED_ANCHOR}`}
+        data-testid="unclassified-tag"
+        className="mr-1 rounded border border-warn-line bg-warn-bg px-1 text-warn underline-offset-2 hover:underline"
+      >
+        미분류
+      </a>
+    );
+  }
+  return <span className="mr-1 rounded border border-line bg-subtle px-1 text-muted">{tag}</span>;
 }
 
 /** 항목 줄의 가운데 칸 — 항목 이름, 그 아래 분류 · 방향 꼬리표와 건수. */
@@ -273,11 +332,7 @@ function ItemCell({ item }: { item: SectionItem }) {
       <span className="block">{item.key}</span>
       <MemoNote memos={item.memos} memoCount={item.memoCount} item={item.key} />
       <span className="mt-0.5 block text-xs text-muted tabular-nums">
-        {item.tag !== undefined ? (
-          <span className="mr-1 rounded border border-line bg-subtle px-1 text-muted">
-            {item.tag}
-          </span>
-        ) : null}
+        {item.tag !== undefined ? <CategoryTag tag={item.tag} /> : null}
         {item.flow !== undefined ? (
           <span className="mr-1 rounded border border-line bg-accent-bg px-1 text-accent-text">
             {item.flow}
@@ -334,8 +389,8 @@ function KindTable({
                 ) : null}
                 <ItemCell item={item} />
                 <td className={NUM}>
-                <Amount value={item.total} />
-              </td>
+                  <Amount value={item.total} />
+                </td>
               </tr>
             ))
           )}
@@ -351,8 +406,8 @@ function KindTable({
  *
  * `종류` 칸이 방향이다(`일회성 수입` · `일회성 지출`). 같은 항목의 입금과 출금은
  * 서로 다른 줄이고 한 줄 안에서 상계하지 않는다. 아직 분류하지 않은 행은 `미분류`
- * 꼬리표를 달고 여기 보인다. 아래에 방향별 소계와 합계(순액)를 둔다 — 합계가
- * 종합정산의 `변동비` 줄과 같은 값이다.
+ * 꼬리표(아래 미분류 목록으로 가는 링크)를 달고 여기 보인다. 아래에 방향별 소계와
+ * 합계(순액)를 둔다 — 합계가 종합정산의 `변동비` 줄과 같은 값이다.
  */
 function VariableTable({
   lines,
@@ -384,7 +439,6 @@ function VariableTable({
           <tr>
             <th scope="colgroup" colSpan={3} className={`${CELL} bg-subtle text-left text-[13px] font-semibold`}>
               변동비
-              <span className="ml-1.5 text-xs font-normal text-muted">일회성 수입 · 지출 · 미분류 포함</span>
             </th>
           </tr>
           <Head3 />
@@ -409,14 +463,14 @@ function VariableTable({
                   ) : null}
                   <ItemCell item={item} />
                   <td className={NUM}>
-                <Amount value={item.total} />
-              </td>
+                    <Amount value={item.total} />
+                  </td>
                 </tr>
               )),
             )
           )}
-          <WideRow label="일회성 수입" value={<Amount value={section.일회성수입.total} />} note="소계" />
-          <WideRow label="일회성 지출" value={<Amount value={section.일회성지출.total} />} note="소계" />
+          <WideRow label="일회성 수입 소계" value={<Amount value={section.일회성수입.total} />} />
+          <WideRow label="일회성 지출 소계" value={<Amount value={section.일회성지출.total} />} />
           <WideRow label="합계" value={<Amount value={section.total} />} tone="plain" />
         </tbody>
       </table>
@@ -425,10 +479,8 @@ function VariableTable({
 }
 
 /**
- * 원본 중앙 그룹의 계좌 표.
- *
- * 맨 위에 `고정비 계좌` · `비상금 계좌` 머리 줄을 둔다 — 이 아래 줄은 전부 그
- * 계좌의 거래라는 표시다(왼쪽 열 메인 계좌의 `고정비` 분류 표와 헷갈리지 않게).
+ * 원본 중앙 그룹의 계좌 표(고정비 · 비상금). 계좌 이름은 이 표를 감싼 접이식 섹션의
+ * 머리(AccountSection)에 있다.
  *
  * 원본 순서: 입금 → 항목 → 합계(집행) → 보정 → 잔액.
  * `보정` 자리에는 실거래로 잡히는 **이자**가 온다. 그리고 원본에는 없던
@@ -438,6 +490,10 @@ function VariableTable({
  * `금고 인출` 줄이 더 붙는다(2026-09). 이 돈은 집행도 입금도 아니라 순증감에
  * 들어가지 않는다 — 순증감은 금고까지 합친 이 계좌 돈의 증감이고, `잔액` 은
  * 명세서의 계좌 잔액(금고 제외)이다.
+ *
+ * 2026-09(사용자 요청: "설명을 위한 글들은 제거해줘"): 줄 옆의 설명 문구를 걷어 냈다.
+ * 뜻은 줄 이름(`메인에서 입금` · `집행 합계`)과 짧은 꼬리표(`금고 제외` · `역산`)로 남기고,
+ * 순증감의 식은 줄 이름에 마우스를 올리면 보인다.
  */
 function AccountTable({
   block,
@@ -452,21 +508,17 @@ function AccountTable({
   const title = `${block.nickname} 계좌`;
   // 계좌 ↔ 금고 이동이 있는 달에만 금고 줄을 그린다(lib/report/monthly.mjs 의 isVaultMove).
   const hasVault = block.금고저축.count > 0 || block.금고인출.count > 0;
+  const inferred = balance?.derived === true ? inferredBalanceHint(balance) : undefined;
 
   return (
     <Frame>
       <table className={BOX} data-testid="account-table">
         <caption className="sr-only">{title}</caption>
         <thead>
-          <tr className={TONE[tone]}>
-            <th scope="colgroup" colSpan={3} className={`${CELL} bg-subtle text-left text-[13px] font-semibold`}>
-              {title}
-            </th>
-          </tr>
           <Head3 />
         </thead>
         <tbody>
-          <WideRow label="입금" value={<Amount value={block.입금.total} />} note="메인에서" />
+          <WideRow label="메인에서 입금" value={<Amount value={block.입금.total} />} />
           {lines.length === 0 ? (
             <tr>
               <th scope="row" className={KIND}>
@@ -487,11 +539,7 @@ function AccountTable({
                   <span className="block">{line.item}</span>
                   <MemoNote memos={line.memos} memoCount={line.memoCount} item={line.item} />
                   <span className="mt-0.5 block text-xs text-muted tabular-nums">
-                    {line.category !== block.nickname ? (
-                      <span className="mr-1 rounded border border-line bg-subtle px-1 text-muted">
-                        {line.category}
-                      </span>
-                    ) : null}
+                    {line.category !== block.nickname ? <CategoryTag tag={line.category} /> : null}
                     {line.count}건
                   </span>
                 </td>
@@ -499,54 +547,48 @@ function AccountTable({
               </tr>
             ))
           )}
-          <WideRow label="합계" value={<Amount value={block.집행.total} />} note="집행" />
+          <WideRow label="집행 합계" value={<Amount value={block.집행.total} />} />
           <WideRow label="이자" value={<Amount value={block.이자.total} />} />
-          {hasVault ? (
-            <>
-              {block.금고저축.count > 0 ? (
-                <WideRow
-                  label="금고저축"
-                  value={<Amount value={block.금고저축.total} />}
-                  note={`계좌 → 금고 ${block.금고저축.count}건`}
-                />
-              ) : null}
-              {block.금고인출.count > 0 ? (
-                <WideRow
-                  label="금고 인출"
-                  value={<Amount value={block.금고인출.total} />}
-                  note={`금고 → 계좌 ${block.금고인출.count}건`}
-                />
-              ) : null}
-            </>
+          {block.금고저축.count > 0 ? (
+            <WideRow
+              label="금고저축"
+              value={<Amount value={block.금고저축.total} />}
+              tags={<Tag hint="계좌 → 금고">{block.금고저축.count}건</Tag>}
+            />
+          ) : null}
+          {block.금고인출.count > 0 ? (
+            <WideRow
+              label="금고 인출"
+              value={<Amount value={block.금고인출.total} />}
+              tags={<Tag hint="금고 → 계좌">{block.금고인출.count}건</Tag>}
+            />
           ) : null}
           {block.무효.count > 0 ? (
             <WideRow
               label="무효 처리"
               value={<Amount value={block.무효.total} />}
-              note={`상쇄한 출금 · 입금 ${block.무효.count}건 · 순증감 제외`}
+              tags={<Tag hint="순증감에서 제외">{block.무효.count}건</Tag>}
             />
           ) : null}
           <WideRow
             label="순증감"
+            hint={hasVault ? "입금 + 이자 − 집행 (금고 포함)" : "입금 + 이자 − 집행"}
             value={<Amount value={block.순증감} />}
-            note={hasVault ? "입금 + 이자 − 집행 · 금고 포함" : "입금 + 이자 − 집행"}
             tone="plain"
           />
           <WideRow
             label="잔액"
             value={balance?.derived === true ? plain(balance.closing) : "—"}
             tone={tone}
-            // '계좌 · 금고 제외' 는 잔액 숫자를 설명하는 말이라 숫자가 있을 때(derived)만
-            // 붙인다. 숫자가 '—' 이면 그 이유를, 잔액 정보가 없으면 아무것도 붙이지 않는다.
-            // 잔액 칸이 빈 경계 거래를 금액으로 이어 계산했으면 그 사실도 함께 밝힌다.
-            note={
-              balance === undefined
-                ? undefined
-                : balance.derived
-                  ? [hasVault ? "계좌 · 금고 제외" : undefined, inferredBalanceNote(balance)]
-                      .filter((part) => part !== undefined)
-                      .join(" · ") || undefined
-                  : `(${balanceReasonText(balance.reason)})`
+            tags={
+              balance === undefined ? null : balance.derived ? (
+                <>
+                  {hasVault ? <Tag hint="계좌 잔액만, 금고는 제외">금고 제외</Tag> : null}
+                  {inferred !== undefined ? <Tag hint={inferred}>역산</Tag> : null}
+                </>
+              ) : (
+                <Tag>{balanceReasonText(balance.reason)}</Tag>
+              )
             }
           />
         </tbody>
@@ -560,20 +602,18 @@ function SummaryRow({
   label,
   value,
   tone,
-  note,
+  tags,
 }: {
   label: string;
   value: React.ReactNode;
   tone?: keyof typeof TONE;
-  note?: string;
+  tags?: React.ReactNode;
 }) {
   return (
     <tr className={tone === undefined ? undefined : TONE[tone]}>
       <th scope="row" className={`${CELL} text-left font-normal`}>
         {label}
-        {note !== undefined ? (
-          <span className="ml-1.5 text-xs font-normal text-muted">{note}</span>
-        ) : null}
+        {tags}
       </th>
       <td className={NUM}>{value}</td>
     </tr>
@@ -586,77 +626,149 @@ function itemTotal(items: SectionItem[], key: string): number {
   return items.find((item) => item.key === key)?.total ?? 0;
 }
 
-/** 검산 결과. 어긋났다면 표 위에서 가장 먼저 보여야 한다. */
+// ── 접이식 계좌 섹션 ───────────────────────────────────────────────────────
+
+/**
+ * 계좌 하나(메인 · 고정비 · 비상금)의 표 묶음. **기본은 접힘**이다(2026-09 사용자 요청:
+ * "월별현금흐름표가 너무 길어지니까 계좌별로 펼치기/숨기기 … 기본값은 숨기기").
+ *
+ * 네이티브 `<details>` 라 스크립트 없이 열고 닫히고, 키보드(Enter · Space)와 화면 읽기
+ * 프로그램이 펼침 상태를 그대로 안다. `open` 을 React 가 쥐지 않으므로 분류를 적용해
+ * 화면이 새로 고쳐져도 사용자가 연 섹션은 열린 채로 남는다.
+ *
+ * 접힌 머리에도 그 계좌의 핵심 숫자를 싣는다 — 접어 두어도 무엇이 들었는지 보인다.
+ */
+function AccountSection({
+  role,
+  title,
+  stats,
+  children,
+}: {
+  role: string;
+  title: string;
+  stats: Array<{ label: string; value: React.ReactNode }>;
+  children: React.ReactNode;
+}) {
+  return (
+    <details
+      data-testid="account-section"
+      data-account={role}
+      className="group rounded-lg border border-line bg-canvas open:bg-subtle/40"
+    >
+      <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-4 gap-y-1 rounded-lg px-3 py-2.5 text-[13px] select-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent sm:px-4 [&::-webkit-details-marker]:hidden">
+        <span className="flex items-center gap-2 font-semibold text-fg">
+          <svg
+            aria-hidden
+            viewBox="0 0 16 16"
+            className="size-3.5 shrink-0 text-muted transition-transform group-open:rotate-90"
+          >
+            <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          {title}
+        </span>
+        <span className="ml-auto flex flex-wrap justify-end gap-x-4 gap-y-0.5 tabular-nums">
+          {stats.map((stat) => (
+            <span key={stat.label} className="whitespace-nowrap">
+              <span className="mr-1.5 text-xs text-muted">{stat.label}</span>
+              <span className="font-medium">{stat.value}</span>
+            </span>
+          ))}
+        </span>
+      </summary>
+      <div className="border-t border-line p-3 sm:p-4">{children}</div>
+    </details>
+  );
+}
+
+// ── 검산 ───────────────────────────────────────────────────────────────────
+
+/**
+ * 검산 결과와 이 달의 할 일(미분류). 어긋났다면 표 위에서 가장 먼저 보여야 한다.
+ *
+ * 2026-09: 통과 · 미검산은 한 줄짜리 상태 표시로 줄였다(설명 문장 제거). 불일치는 두 값과
+ * 차액을 그대로 드러내는 경고로 남긴다.
+ */
 export function VerifyBanner({
   verification,
   mainNickname,
+  unclassified = 0,
 }: {
   verification: Verification;
   mainNickname: string | null;
+  /** 이 달 미분류 건수. 0 보다 크면 아래 미분류 목록으로 가는 링크를 붙인다. */
+  unclassified?: number;
 }) {
   const account = mainNickname ?? "메인";
+  const todo =
+    unclassified > 0 ? (
+      <a
+        href={`#${UNCLASSIFIED_ANCHOR}`}
+        data-testid="unclassified-link"
+        className="inline-flex h-7 items-center rounded-md border border-warn-line bg-warn-bg px-2 text-xs font-medium text-warn hover:underline"
+      >
+        미분류 {unclassified}건
+      </a>
+    ) : null;
 
   if (!verification.checked) {
     return (
-      <section className="rounded-lg border border-warn-line bg-warn-bg px-4 py-3 text-[13px]">
-        <p className="font-semibold text-warn">
-          <span aria-hidden className="mr-1.5">!</span>검산하지 않았습니다
-        </p>
-        <p className="mt-1 text-soft">
-          {verifyReasonText(verification.reason)}. 값을 추정해서 채우지 않습니다.
-        </p>
-      </section>
+      <div className="flex flex-wrap items-center gap-2" data-testid="verify">
+        <span className="inline-flex h-7 items-center rounded-md border border-warn-line bg-warn-bg px-2 text-xs font-medium text-warn">
+          <span aria-hidden className="mr-1.5">!</span>검산 안 함 · {verifyReasonText(verification.reason)}
+        </span>
+        {todo}
+      </div>
     );
   }
 
   if (verification.ok) {
     return (
-      <section className="rounded-lg border border-ok-line bg-ok-bg px-4 py-3 text-[13px]">
-        <p className="font-semibold text-ok">
-          <span aria-hidden className="mr-1.5">✓</span>검산 통과
-        </p>
-        <p className="mt-1 text-soft">
-          실현순증감 {flow(verification.actual)} 이 {account} 계좌 잔액 변화{" "}
-          {flow(verification.expected)} 과 일치합니다.
-        </p>
+      <div className="flex flex-wrap items-center gap-2" data-testid="verify">
+        <span
+          title={`실현순증감 ${flow(verification.actual)} = ${account} 계좌 잔액 변화 ${flow(verification.expected)}`}
+          className="inline-flex h-7 items-center rounded-md border border-ok-line bg-ok-bg px-2 text-xs font-medium text-ok"
+        >
+          <span aria-hidden className="mr-1.5">✓</span>검산 일치
+        </span>
         {verification.inferred ? (
-          <p className="mt-1 text-xs text-muted">
-            거래 후 잔액 칸이 빈 첫 · 마지막 거래는 가까운 잔액에서 거래 금액으로 이어 계산했습니다
-            (그 거래들은 잔액과 대조되지 않습니다).
-          </p>
+          <span
+            title="잔액 칸이 빈 첫 · 마지막 거래는 금액으로 이어 계산"
+            className="inline-flex h-7 items-center rounded-md border border-line bg-subtle px-2 text-xs text-muted"
+          >
+            역산 포함
+          </span>
         ) : null}
-      </section>
+        {todo}
+      </div>
     );
   }
 
   return (
     <section
       role="alert"
+      data-testid="verify"
       className="rounded-lg border border-danger-line bg-danger-bg px-4 py-3 text-[13px]"
     >
-      <p className="text-[13px] font-semibold text-danger">
-        <span aria-hidden className="mr-1.5">✕</span>검산 불일치 — 차액 {flow(verification.difference)}
+      <p className="flex flex-wrap items-center gap-2 text-[13px] font-semibold text-danger">
+        <span>
+          <span aria-hidden className="mr-1.5">✕</span>검산 불일치 — 차액 {flow(verification.difference)}
+        </span>
+        {verification.inferred ? (
+          <span className="rounded border border-line bg-subtle px-1 text-xs font-normal text-muted">역산 포함</span>
+        ) : null}
+        {todo}
       </p>
       <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
-        <dt className="text-muted">실현순증감(거래 금액 합)</dt>
+        <dt className="text-muted">실현순증감</dt>
         <dd className="tabular-nums">{flow(verification.actual)}</dd>
         <dt className="text-muted">{account} 계좌 잔액 변화</dt>
         <dd className="tabular-nums">{flow(verification.expected)}</dd>
       </dl>
-      <p className="mt-2 text-soft">
-        두 값은 서로 다른 컬럼(거래 금액 · 거래 후 잔액)에서 나옵니다. 어긋났다면
-        거래가 빠졌거나 파싱이 어긋난 신호입니다. <strong>손으로 값을 맞춰 덮지 마세요.</strong>
-      </p>
-      {verification.inferred ? (
-        <p className="mt-1 text-xs text-muted">
-          거래 후 잔액 칸이 빈 첫 · 마지막 거래는 가까운 잔액에서 거래 금액으로 이어 계산했습니다.
-        </p>
-      ) : null}
     </section>
   );
 }
 
-/** 현금흐름표 본문 — 정산 템플릿 배치. */
+/** 현금흐름표 본문 — 계좌별 접이식 섹션(정산 템플릿 배치) + 늘 펼친 종합정산 · 계좌별 잔액 변화. */
 export function ReportView({
   report,
   verification,
@@ -671,7 +783,7 @@ export function ReportView({
   const lines = report.항목별 as Record<"수입" | "고정지출1" | "고정지출2" | "카드비" | "변동비", Line[]>;
   const mainBalance = report.계좌별잔액변화.find((entry) => entry.role === "main");
 
-  // 우측 카드비 표 — 원본의 변동비 표처럼 카드사별 줄만 있다. 일회성 항목은
+  // 카드비 표 — 원본의 변동비 표처럼 카드사별 줄만 있다. 일회성 항목은
   // 아래 변동비 표(VariableTable)로 따로 간다.
   const cardItems: SectionItem[] = card.issuers.map((issuer) => ({
     key: issuer.issuer,
@@ -686,26 +798,30 @@ export function ReportView({
   const 비상금 = itemTotal(fixed2, "비상금") + itemTotal(moves, "비상금");
   const 기타이체 = itemTotal(moves, "기타");
 
-  const summaryRows: Array<{ label: string; value: number; note?: string }> = [
+  const summaryRows: Array<{ label: string; value: number; tags?: React.ReactNode }> = [
     { label: "수입", value: report.종합정산.수입 },
     { label: "저축", value: itemTotal(fixed1, "저축") },
     { label: "용돈", value: itemTotal(fixed1, "용돈") },
     { label: "주거비", value: itemTotal(fixed1, "주거비") },
-    { label: "고정비", value: 고정비, note: "계좌 이체 포함" },
-    { label: "비상금", value: 비상금, note: "계좌 이체 포함" },
+    { label: "고정비", value: 고정비, tags: <Tag hint="고정비 계좌로 옮긴 돈 포함">이체 포함</Tag> },
+    { label: "비상금", value: 비상금, tags: <Tag hint="비상금 계좌로 옮긴 돈 포함">이체 포함</Tag> },
     { label: "카드비", value: report.종합정산.카드비 },
-    { label: "변동비", value: report.종합정산.변동비, note: "일회성 수입 · 지출" },
+    { label: "변동비", value: report.종합정산.변동비 },
   ];
 
   // 목적지를 모르는 이체. 0 이면 줄을 만들지 않고, 값이 있으면 반드시 보인다 —
   // 합계에서만 조용히 사라지는 돈이 없어야 한다.
   if (기타이체 !== 0) {
-    summaryRows.push({ label: "기타 이체", value: 기타이체, note: "목적지 미확인" });
+    summaryRows.push({ label: "기타 이체", value: 기타이체, tags: <Tag>목적지 미확인</Tag> });
   }
   // 무효(상쇄)로 표시한 메인 계좌 거래. 같은 달의 쌍이면 0 이고, 달을 걸친 쌍이면 이 달에
   // 남은 한쪽 금액이다(메인 잔액이 실제로 움직였다). 건이 있을 때만 그린다.
   if (report.무효처리.count > 0) {
-    summaryRows.push({ label: "무효 처리", value: report.종합정산.무효처리, note: `상쇄 ${report.무효처리.count}건` });
+    summaryRows.push({
+      label: "무효 처리",
+      value: report.종합정산.무효처리,
+      tags: <Tag>{report.무효처리.count}건</Tag>,
+    });
   }
 
   const shown = summaryRows.reduce((sum, item) => sum + item.value, 0);
@@ -718,99 +834,103 @@ export function ReportView({
   // 원본 마지막 두 줄. 회색 `보정` 자리에 검산 차액이 온다.
   const residual = verification.checked ? verification.difference : null;
 
+  const mainTitle = `${report.mainAccount?.nickname ?? "메인"} 계좌`;
+
   return (
     <div className="flex flex-col gap-6">
       <VerifyBanner
         verification={verification}
         mainNickname={report.mainAccount?.nickname ?? null}
+        unclassified={report.미분류.count}
       />
 
-      <p className="text-xs text-muted">
-        금액은 저장된 부호 그대로입니다 — {report.signConvention}. 지출은 −, 입금은 +
-        로 표시합니다. 배치는 기존 정산 템플릿을 따릅니다. 항목 줄은{" "}
-        <Link
-          href={`/classify?month=${report.yearMonth}&filter=all`}
-          className="text-accent-text underline underline-offset-4"
+      <div className="flex flex-col gap-2">
+        <AccountSection
+          role="main"
+          title={mainTitle}
+          stats={[
+            { label: "수입", value: <Amount value={report.수입.total} /> },
+            { label: "순증감", value: <Amount value={합계} /> },
+            { label: "잔액", value: mainBalance?.derived === true ? plain(mainBalance.closing) : "—" },
+          ]}
         >
-          분류 정리
-        </Link>
-        에서 정한 항목 이름이고, 정하지 않았으면 적요(카드대금은 카드사) 그대로입니다.
-      </p>
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* 좌: 메인에서 바로 나가는 돈 */}
-        <div className="flex min-w-0 flex-col gap-4">
-          <KindTable
-            kind="수입"
-            items={linesAsItems(lines.수입, "수입", "in")}
-            total={report.수입.total}
-            tone="income"
-            caption={`${report.yearMonth} 수입`}
-          />
-          {fixed1.map((item) => (
-            <KindTable
-              key={item.key}
-              kind={item.key}
-              items={linesAsItems(
-                lines.고정지출1.filter((line) => line.category === item.key),
-                item.key,
-              )}
-              total={item.total}
-              caption={`${report.yearMonth} ${item.key}`}
-            />
-          ))}
-          {/* 메인 계좌에서 바로 나간 고정비 · 비상금 성격의 지출. 원본에는 없는
-              자리라 건이 있을 때만 그린다. */}
-          {fixed2Shown.map((item) => (
-            <KindTable
-              key={item.key}
-              kind={item.key}
-              items={linesAsItems(
-                lines.고정지출2.filter((line) => line.category === item.key),
-                item.key,
-              )}
-              total={item.total}
-              caption={`${report.yearMonth} 메인 계좌의 ${item.key}`}
-            />
-          ))}
-        </div>
-
-        {/* 중: 메인이 아닌 계좌 */}
-        <div className="flex min-w-0 flex-col gap-4">
-          {report.계좌블록.length === 0 ? (
-            <p className="text-[13px] text-muted">메인 외 계좌가 등록되어 있지 않습니다.</p>
-          ) : (
-            report.계좌블록.map((block) => (
-              <AccountTable
-                key={block.role}
-                block={block}
-                balance={report.계좌별잔액변화.find((entry) => entry.role === block.role)}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {/* 좌: 메인에서 바로 나가는 돈 */}
+            <div className="flex min-w-0 flex-col gap-4">
+              <KindTable
+                kind="수입"
+                items={linesAsItems(lines.수입, "수입", "in")}
+                total={report.수입.total}
+                tone="income"
+                caption={`${report.yearMonth} 수입`}
               />
-            ))
-          )}
-          <p className="text-xs text-muted">
-            이 계좌들의 입금은 메인에서 간 돈이라 오른쪽 종합정산의 수입으로 세지
-            않습니다. 이자도 수입으로 올리지 않고 <strong>그 계좌 안에서 집행을
-            상계</strong>합니다(순증감). 비상금 계좌에서 적요 ‘비상금’으로 나간 돈은 그 계좌에
-            연결된 <strong>금고로 옮긴 돈(금고저축)</strong>이라 집행으로 세지 않고, 금고에서
-            꺼낸 돈도 입금으로 세지 않습니다.
-          </p>
-        </div>
+              {fixed1.map((item) => (
+                <KindTable
+                  key={item.key}
+                  kind={item.key}
+                  items={linesAsItems(
+                    lines.고정지출1.filter((line) => line.category === item.key),
+                    item.key,
+                  )}
+                  total={item.total}
+                  caption={`${report.yearMonth} ${item.key}`}
+                />
+              ))}
+              {/* 메인 계좌에서 바로 나간 고정비 · 비상금 성격의 지출. 원본에는 없는
+                  자리라 건이 있을 때만 그린다. */}
+              {fixed2Shown.map((item) => (
+                <KindTable
+                  key={item.key}
+                  kind={item.key}
+                  items={linesAsItems(
+                    lines.고정지출2.filter((line) => line.category === item.key),
+                    item.key,
+                  )}
+                  total={item.total}
+                  caption={`${report.yearMonth} 메인 계좌의 ${item.key}`}
+                />
+              ))}
+            </div>
+            {/* 우: 카드비 · 변동비 */}
+            <div className="flex min-w-0 flex-col gap-4">
+              <KindTable
+                kind="카드비"
+                items={cardItems}
+                total={card.total}
+                caption={`${report.yearMonth} 카드비`}
+              />
+              <VariableTable
+                lines={lines.변동비}
+                section={report.변동비}
+                caption={`${report.yearMonth} 변동비(일회성 수입 · 지출)`}
+              />
+            </div>
+          </div>
+        </AccountSection>
 
-        {/* 우: 변동비 · 종합정산 · 메인 계좌 잔액 */}
-        <div className="flex min-w-0 flex-col gap-4">
-          <KindTable
-            kind="카드비"
-            items={cardItems}
-            total={card.total}
-            caption={`${report.yearMonth} 카드비`}
-          />
-          <VariableTable
-            lines={lines.변동비}
-            section={report.변동비}
-            caption={`${report.yearMonth} 변동비(일회성 수입 · 지출)`}
-          />
+        {report.계좌블록.map((block) => {
+          const balance = report.계좌별잔액변화.find((entry) => entry.role === block.role);
+          return (
+            <AccountSection
+              key={block.role}
+              role={block.role}
+              title={`${block.nickname} 계좌`}
+              stats={[
+                { label: "순증감", value: <Amount value={block.순증감} /> },
+                { label: "잔액", value: balance?.derived === true ? plain(balance.closing) : "—" },
+              ]}
+            >
+              <AccountTable block={block} balance={balance} />
+            </AccountSection>
+          );
+        })}
+      </div>
 
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <section className="flex min-w-0 flex-col gap-2" aria-labelledby="summary-title" data-testid="summary">
+          <h2 id="summary-title" className="text-[13px] font-semibold text-fg">
+            종합정산
+          </h2>
           <Frame>
             <table className={BOX}>
               <caption className="sr-only">{report.yearMonth} 종합정산</caption>
@@ -830,39 +950,37 @@ export function ReportView({
                     key={item.label}
                     label={item.label}
                     value={<Amount value={item.value} />}
-                    note={item.note}
+                    tags={item.tags}
                   />
                 ))}
                 {missing === 0 ? null : (
-                  <SummaryRow
-                    label="표에 싣지 못한 항목"
-                    value={<Amount value={missing} />}
-                    note="합계와 위 줄들의 차액"
-                  />
+                  <SummaryRow label="표에 싣지 못한 항목" value={<Amount value={missing} />} />
                 )}
                 <SummaryRow label="합계" value={<Amount value={합계} />} tone="plain" />
-              </tbody>
-            </table>
-          </Frame>
-
-          <Frame>
-            <table className={BOX}>
-              <caption className="sr-only">{report.yearMonth} 검산과 메인 계좌 잔액</caption>
-              <tbody>
                 <tr>
                   <th scope="row" className={`${CELL} text-left font-normal text-muted`}>
                     검산 차액
-                    <span className="ml-1.5 text-xs">0 이어야 합니다</span>
                   </th>
                   <td
+                    data-testid="residual"
                     className={`${NUM} ${residual !== null && residual !== 0 ? "font-semibold text-danger" : "text-muted"}`}
                   >
-                    {residual === null ? "—" : flow(residual)}
+                    {residual === null ? (
+                      "—"
+                    ) : (
+                      <>
+                        {flow(residual)}
+                        <span aria-hidden className={`ml-1.5 ${residual === 0 ? "text-ok" : "text-danger"}`}>
+                          {residual === 0 ? "✓" : "✕"}
+                        </span>
+                        <span className="sr-only">{residual === 0 ? " (일치)" : " (불일치)"}</span>
+                      </>
+                    )}
                   </td>
                 </tr>
                 <tr className={TONE.main}>
                   <th scope="row" className={`${CELL} text-left`}>
-                    메인 계좌 잔액
+                    {mainTitle} 잔액
                   </th>
                   <td className={NUM}>
                     {mainBalance?.derived === true ? plain(mainBalance.closing) : "—"}
@@ -871,96 +989,60 @@ export function ReportView({
               </tbody>
             </table>
           </Frame>
-        </div>
-      </div>
+        </section>
 
-      <section className="flex flex-col gap-2">
-        <h2 className="text-[13px] font-semibold text-fg">계좌별 잔액 변화</h2>
-        <p className="text-xs text-muted">
-          원본 템플릿에는 없는 보조 표입니다. 위 ‘잔액’ 칸이 어디서 나왔는지와,
-          잔액을 끌어내지 못한 사유를 여기서 봅니다.
-        </p>
-        <Frame>
-          <table className={BOX}>
-            <thead>
-              <tr>
-                <th scope="col" className={HEAD}>
-                  계좌
-                </th>
-                <th scope="col" className={HEAD_NUM}>
-                  시작 잔액
-                </th>
-                <th scope="col" className={HEAD_NUM}>
-                  끝 잔액
-                </th>
-                <th scope="col" className={HEAD_NUM}>
-                  변화
-                </th>
-                <th scope="col" className={HEAD_NUM}>
-                  건수
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {report.계좌별잔액변화.map((entry) => (
-                <tr key={entry.role}>
-                  <th scope="row" className={`${CELL} text-left font-normal`}>
-                    <span className="whitespace-nowrap">{entry.nickname}</span>
-                    {entry.derived ? (
-                      inferredBalanceNote(entry) === undefined ? null : (
-                        <span className="ml-2 text-xs text-muted">({inferredBalanceNote(entry)})</span>
-                      )
-                    ) : (
-                      <span className="ml-2 text-xs text-muted">
-                        ({balanceReasonText(entry.reason)})
-                      </span>
-                    )}
+        <section className="flex min-w-0 flex-col gap-2" aria-labelledby="balances-title" data-testid="balances">
+          <h2 id="balances-title" className="text-[13px] font-semibold text-fg">
+            계좌별 잔액 변화
+          </h2>
+          <Frame>
+            <table className={BOX}>
+              <thead>
+                <tr>
+                  <th scope="col" className={HEAD}>
+                    계좌
                   </th>
-                  <td className={NUM}>{plain(entry.opening)}</td>
-                  <td className={NUM}>{plain(entry.closing)}</td>
-                  <td className={NUM}>
-                    <Amount value={entry.change} />
-                  </td>
-                  <td className={`${NUM} text-muted`}>{entry.count}건</td>
+                  <th scope="col" className={HEAD_NUM}>
+                    시작 잔액
+                  </th>
+                  <th scope="col" className={HEAD_NUM}>
+                    끝 잔액
+                  </th>
+                  <th scope="col" className={HEAD_NUM}>
+                    변화
+                  </th>
+                  <th scope="col" className={HEAD_NUM}>
+                    건수
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </Frame>
-      </section>
-
-      <section className="flex flex-col gap-1">
-        <h2 className="text-[13px] font-semibold text-fg">미분류</h2>
-        <p className="text-[13px] tabular-nums">
-          {report.미분류.count}건 (전체 {report.거래건수}건)
-          {report.미분류.count > 0 ? (
-            <Link
-              href={`/classify?month=${report.yearMonth}`}
-              className="ml-2 text-accent-text underline underline-offset-4"
-            >
-              미분류 정리하기
-            </Link>
-          ) : null}
-        </p>
-        {report.미분류.계좌간이체입금 > 0 ? (
-          <p className="text-xs text-muted">
-            메인 계좌에서 고정비 · 비상금 계좌로 옮긴 돈이 받는 쪽 계좌에 찍힌 입금{" "}
-            {report.미분류.계좌간이체입금}건은 분류가 없어도 위 계좌 표의 ‘입금’으로 세므로
-            미분류에서 뺐습니다.
-          </p>
-        ) : null}
-        {report.미분류.금고이동 > 0 ? (
-          <p className="text-xs text-muted">
-            비상금 계좌와 연결된 금고 사이를 옮긴 돈 {report.미분류.금고이동}건은 분류가 없어도 위
-            계좌 표의 ‘금고저축’ · ‘금고 인출’로 세므로 미분류에서 뺐습니다.
-          </p>
-        ) : null}
-        <p className="text-xs text-muted">
-          메인 계좌의 미분류 거래는 분류하기 전까지 입금 · 출금 모두 위 변동비 표에 ‘미분류’
-          꼬리표로 나옵니다(입금은 일회성 수입, 출금은 일회성 지출 쪽). 분류하면 제자리로
-          옮겨 갑니다. 예전에 ‘기타’로 분류한 거래는 변동비로 봅니다.
-        </p>
-      </section>
+              </thead>
+              <tbody>
+                {report.계좌별잔액변화.map((entry) => {
+                  const inferred = entry.derived ? inferredBalanceHint(entry) : undefined;
+                  return (
+                    <tr key={entry.role}>
+                      <th scope="row" className={`${CELL} text-left font-normal`}>
+                        <span className="whitespace-nowrap">{entry.nickname}</span>
+                        {entry.derived ? (
+                          inferred === undefined ? null : <Tag hint={inferred}>역산</Tag>
+                        ) : (
+                          <Tag>{balanceReasonText(entry.reason)}</Tag>
+                        )}
+                      </th>
+                      <td className={NUM}>{plain(entry.opening)}</td>
+                      <td className={NUM}>{plain(entry.closing)}</td>
+                      <td className={NUM}>
+                        <Amount value={entry.change} />
+                      </td>
+                      <td className={`${NUM} text-muted`}>{entry.count}건</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Frame>
+        </section>
+      </div>
     </div>
   );
 }
