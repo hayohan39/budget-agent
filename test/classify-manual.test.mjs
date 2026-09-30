@@ -23,6 +23,8 @@ import {
   listMappings,
   parseClassifyRequest,
   parseMappingRequest,
+  unclassifiedRows,
+  listUnclassifiedRows,
   updateMapping,
 } from '../lib/classify/manual.mjs';
 import { CLASSIFY_CATEGORIES, buildMonthlyReport } from '../lib/report/monthly.mjs';
@@ -38,6 +40,15 @@ import { SCRATCH_ACCOUNTS, runMigrations, withScratchDatabase } from './helpers/
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.join(HERE, 'fixtures', 'toss-sample-masked.xlsx');
+
+/** 현금흐름표 거래 줄에서 DB 가 매기는 id 와 날짜를 뺀 모양. */
+function plainLine(line) {
+  if (line === undefined) return undefined;
+  const { id, day, ...rest } = line;
+  assert.match(id, /^[1-9][0-9]*$/);
+  assert.match(day, /^[0-9]{1,2}\/[0-9]{1,2}$/);
+  return rest;
+}
 
 function valid(overrides = {}) {
   return {
@@ -70,6 +81,7 @@ test('올바른 요청은 정규화된 키 · 항목으로 통과한다', () => 
       item: '정수기 렌탈',
       stripMonth: false,
       pattern: null,
+      txn: null,
     },
   });
 });
@@ -350,8 +362,8 @@ test('이번만: 그 달 그 묶음만 manual 로 바꾸고 매핑은 만들지 
     // 리포트에 항목 줄로 나오고 검산은 그대로다.
     const report = await buildMonthlyReport(client, '2026-08');
     assert.deepEqual(
-      report.항목별.고정지출2.find((line) => line.item === '정수기'),
-      { category: '고정비', item: '정수기', direction: 'out', total: -3780, count: 1, memos: [], memoCount: 0 },
+      plainLine(report.항목별.고정지출2.find((line) => line.item === '정수기')),
+      { category: '고정비', item: '정수기', direction: 'out', total: -3780, count: 1, memo: null },
     );
     assert.equal(report.미분류.count, 7);
     assert.equal(verifyMonthlyReport(report).ok, true);
@@ -473,13 +485,13 @@ test('체크박스 켠 앞으로도: 월 토큰을 지운 키로 매핑을 저�
     // /report 에는 지운 키가 아니라 사람이 고른 항목 이름이 그대로 나온다(양쪽 달).
     const augReport = await buildMonthlyReport(client, '2026-08');
     assert.deepEqual(
-      augReport.항목별.고정지출2.find((line) => line.item === '정수기'),
-      { category: '고정비', item: '정수기', direction: 'out', total: -3780, count: 1, memos: [], memoCount: 0 },
+      plainLine(augReport.항목별.고정지출2.find((line) => line.item === '정수기')),
+      { category: '고정비', item: '정수기', direction: 'out', total: -3780, count: 1, memo: null },
     );
     const sepReport = await buildMonthlyReport(client, '2026-09');
     assert.deepEqual(
-      sepReport.항목별.고정지출2.find((line) => line.item === '정수기'),
-      { category: '고정비', item: '정수기', direction: 'out', total: -3780, count: 1, memos: [], memoCount: 0 },
+      plainLine(sepReport.항목별.고정지출2.find((line) => line.item === '정수기')),
+      { category: '고정비', item: '정수기', direction: 'out', total: -3780, count: 1, memo: null },
     );
     assert.equal(verifyMonthlyReport(augReport).ok, true);
     // 9월 행은 이 테스트가 잔액 없이 끼워 넣은 것이라 검산은 스킵된다(잔액 결손).
@@ -1053,26 +1065,20 @@ test('분류 변동비: 입금 · 출금 모두 고를 수 있고, 현금흐름�
     const report = await buildMonthlyReport(client, '2026-08');
     assert.equal(report.미분류.count, 4);
     assert.deepEqual(
-      report.항목별.변동비.filter((line) => line.category === '변동비'),
+      report.항목별.변동비.filter((line) => line.category === '변동비').map(plainLine),
       [
-        // 메모는 항목 줄 아래 보조 글씨로 나간다(2026-09).
-        {
-          category: '변동비',
-          item: '김철수',
-          direction: 'in',
-          total: 4534000,
-          count: 3,
-          memos: ['곰돌이 월급', '곰돌이 휴가비'],
-          memoCount: 2,
-        },
-        { category: '변동비', item: '이영희', direction: 'out', total: -7500, count: 1, memos: [], memoCount: 0 },
+        // 거래 한 건이 한 줄이고(날짜순), 메모는 그 거래의 메모다(2026-09).
+        { category: '변동비', item: '김철수', direction: 'in', total: 1000000, count: 1, memo: '곰돌이 휴가비' },
+        { category: '변동비', item: '김철수', direction: 'in', total: 3500000, count: 1, memo: '곰돌이 월급' },
+        { category: '변동비', item: '이영희', direction: 'out', total: -7500, count: 1, memo: null },
+        { category: '변동비', item: '김철수', direction: 'in', total: 34000, count: 1, memo: null },
       ],
     );
     // 일회성 수입은 수입 섹션에 없다. 남은 미분류 출금(김철수)은 변동비에 미분류 줄로 있다.
     assert.ok(report.항목별.수입.every((line) => line.item !== '김철수'));
     assert.deepEqual(
-      report.항목별.변동비.find((line) => line.category === '미분류' && line.item === '김철수'),
-      { category: '미분류', item: '김철수', direction: 'out', total: -170000, count: 1, memos: ['경주 숙박비'], memoCount: 1 },
+      plainLine(report.항목별.변동비.find((line) => line.category === '미분류' && line.item === '김철수')),
+      { category: '미분류', item: '김철수', direction: 'out', total: -170000, count: 1, memo: '경주 숙박비' },
     );
     assert.equal(verifyMonthlyReport(report).ok, true);
   });
@@ -1097,8 +1103,8 @@ test('예전 기타 매핑 · 행은 변동비로 읽히고, 고쳐 저장하면
 
     const report = await buildMonthlyReport(client, '2026-08');
     assert.deepEqual(
-      report.항목별.변동비.find((line) => line.item === '이영희'),
-      { category: '변동비', item: '이영희', direction: 'out', total: -7500, count: 1, memos: [], memoCount: 0 },
+      plainLine(report.항목별.변동비.find((line) => line.item === '이영희')),
+      { category: '변동비', item: '이영희', direction: 'out', total: -7500, count: 1, memo: null },
     );
 
     // 화면에서 그대로 저장하면(드롭다운이 변동비를 미리 고른다) 저장된 값도 변동비가 된다.
@@ -1296,5 +1302,111 @@ test('DB: 앞으로도는 매핑이 계좌를 모르므로 다른 계좌 · 같�
     const report = await buildMonthlyReport(client, '2026-10');
     assert.equal(report.수입.total, 200000);
     assert.equal(report.미분류.count, 0);
+  });
+});
+
+// ── 거래 한 건(/report 미분류 섹션, 2026-09) ─────────────────────────────
+
+test('txn: 이번만에서만 받고, 1~19자리 숫자 문자열만 통과한다', () => {
+  assert.equal(parseClassifyRequest(valid({ txn: '42' })).value.txn, '42');
+  assert.equal(parseClassifyRequest(valid({ txn: null })).value.txn, null);
+  assert.equal(parseClassifyRequest(valid()).value.txn, null);
+  for (const txn of [42, '', '0', '042', '1.5', '-1', '12345678901234567890', 'abc', ['1'], { id: '1' }]) {
+    const parsed = parseClassifyRequest(valid({ txn }));
+    assert.equal(parsed.ok, false, JSON.stringify(txn));
+    assert.equal(parsed.error, 'badRequest');
+    // 받은 값을 되비추지 않는다.
+    assert.ok(!parsed.message.includes(String(txn)) || String(txn) === '');
+  }
+  // 앞으로도는 묶음 전체 + 같은 키라 거래 한 건을 받지 않는다.
+  const always = parseClassifyRequest(valid({ scope: 'always', txn: '42' }));
+  assert.deepEqual([always.ok, always.error], [false, 'badScope']);
+});
+
+test('unclassifiedRows: 미분류 거래를 한 건씩 — 묶음들의 미분류 건수와 같고 계좌 · 날짜순이다', () => {
+  const accounts = SCRATCH_ACCOUNTS;
+  const rows = [
+    { id: '5', account_id: 1, txn_at: '2026-10-09T09:00:00+09:00', description: '김철수', memo: '곰돌이 월급', amount: '100', category: null },
+    { id: '4', account_id: 1, txn_at: '2026-10-02T09:00:00+09:00', description: '김철수', memo: '곰돌이 월급', amount: '100', category: null },
+    { id: '3', account_id: 3, txn_at: '2026-10-01T09:00:00+09:00', description: '비상금', memo: null, amount: '-500', category: null },
+    { id: '2', account_id: 2, txn_at: '2026-10-01T00:10:00+09:00', description: '가상가게', memo: '', amount: '-300', category: null },
+    { id: '1', account_id: 1, txn_at: '2026-10-05T09:00:00+09:00', description: '분류된것', memo: null, amount: '-1', category: '변동비' },
+  ];
+  const listed = unclassifiedRows(rows, accounts);
+  assert.deepEqual(
+    listed.map((row) => [row.id, row.day, row.account?.role, row.key, row.memo, row.direction, row.amount]),
+    [
+      // 같은 적요 · 같은 메모라도 합치지 않는다.
+      ['4', '10/2', 'main', '김철수', '곰돌이 월급', 'in', 100],
+      ['5', '10/9', 'main', '김철수', '곰돌이 월급', 'in', 100],
+      ['2', '10/1', 'fixed', '가상가게', null, 'out', -300],
+      // 비상금 계좌의 `비상금` 은 금고 이동이라 미분류가 아니다(isVaultMove).
+    ],
+  );
+  const groups = groupRows(rows, CLASSIFY_FILTERS.unclassified, accounts);
+  assert.equal(listed.length, groups.reduce((sum, group) => sum + group.unclassified, 0));
+});
+
+test('DB: 이번만 + txn 은 그 묶음의 그 거래 하나만 바꾸고, 묶음 밖의 거래 id 는 거부한다', async (t) => {
+  await withScratchDatabase(t, 'classify_once_txn', async (client) => {
+    await importFixture(client);
+    // 2026-09 에 같은 묶음(메인 · 이영희 · 메모 없음 · 출금)을 세 건 둔다.
+    await insertTransactions(client, [extraRecord(1), extraRecord(2), extraRecord(3)]);
+
+    const listed = await listUnclassifiedRows(client, '2026-09');
+    assert.deepEqual(
+      listed.map((row) => [row.day, row.key, row.amount]),
+      [
+        ['9/1', '이영희', -1000],
+        ['9/2', '이영희', -2000],
+        ['9/3', '이영희', -3000],
+      ],
+    );
+    const [, middle] = listed;
+
+    const request = valid({ month: '2026-09', key: '이영희', category: '변동비', item: null });
+    assert.deepEqual(await applyClassification(client, { ...request, txn: middle.id }), {
+      ok: true,
+      updated: 1,
+      mapped: false,
+    });
+    const state = await client.query(
+      `SELECT id::text AS id, category, category_source FROM transactions WHERE year_month = '2026-09' ORDER BY txn_at`,
+    );
+    assert.deepEqual(
+      state.rows.map((row) => [row.id === middle.id, row.category, row.category_source]),
+      [
+        [false, null, null],
+        [true, '변동비', 'manual'],
+        [false, null, null],
+      ],
+    );
+    assert.equal((await client.query('SELECT count(*)::int AS n FROM merchant_map')).rows[0].n, 0);
+    assert.equal((await listUnclassifiedRows(client, '2026-09')).length, 2);
+
+    // 다른 달(2026-08)의 거래 id 로 이 묶음을 가리키면 거부하고 아무것도 바꾸지 않는다.
+    const august = (await client.query(`SELECT id::text AS id FROM transactions WHERE year_month = '2026-08' ORDER BY id LIMIT 1`))
+      .rows[0].id;
+    const rejected = await applyClassification(client, { ...request, txn: august });
+    assert.deepEqual([rejected.ok, rejected.error], [false, 'txnNotFound']);
+    assert.ok(!rejected.message.includes(august));
+    // 이미 분류한 거래도 여전히 이 묶음의 거래라 다시 고를 수 있다(묶음은 분류와 무관하다).
+    const remaining = await client.query(
+      `SELECT count(*)::int AS n FROM transactions WHERE year_month = '2026-09' AND category IS NULL`,
+    );
+    assert.equal(remaining.rows[0].n, 2);
+
+    // 현금흐름표: 합계 · 검산은 한 건씩 분류해도 묶음으로 분류할 때와 같은 규칙이다.
+    const report = await buildMonthlyReport(client, '2026-09');
+    assert.equal(report.변동비.total, -6000);
+    assert.equal(report.미분류.count, 2);
+    assert.deepEqual(
+      report.항목별.변동비.map((line) => [line.day, line.category, line.total]),
+      [
+        ['9/1', '미분류', -1000],
+        ['9/2', '변동비', -2000],
+        ['9/3', '미분류', -3000],
+      ],
+    );
   });
 });

@@ -14,12 +14,14 @@
 //     형식이 틀리면 **받은 값을 되비추지 않고** 거부한다.
 //   - console 호출이 이 파일에 없다. 에러는 바인딩 없는 `catch {}` 로 받는다 —
 //     pg 메시지에는 호스트명과 값이 섞여 나온다.
-//   - 화면에 나가는 것은 집계뿐이다. 행 단위 내역 · 거래 일시 · 계좌번호는 없다.
-//     단, 항목 줄의 이름은 사람이 정하지 않았으면 **정규화한 적요**다(사용자가
+//   - 화면에 나가는 것은 합계와 **거래 줄**이다. 2026-09(사용자 요청: "적요나 메모로 겹쳐도
+//     항목으로 합산하지 않는 것으로 변경. 개별항목 모두 보여지게. n건 표시는 이제 제거")부터
+//     항목 줄은 거래 한 건이고 날짜(M/D) · 항목 · 메모 · 금액이 보인다. 거래 시각 · 잔액 ·
+//     계좌번호는 없다. 항목 이름은 사람이 정하지 않았으면 **정규화한 적요**다(사용자가
 //     요청한 변경. PLAN.md "적요 표시 원칙 변경").
-//   - **미분류 섹션(2026-09).** 그 달의 미분류 묶음을 /classify 와 같은 모양(계좌 별칭 · 적요 ·
-//     메모 · 방향별 건수 · 합계)으로 이 화면 아래에 싣고 바로 분류한다(unclassified-section.tsx).
-//     쓰기는 기존 `/api/classify` 로만 간다.
+//   - **미분류 섹션(2026-09).** 그 달의 미분류 거래를 한 건씩(계좌 별칭 · 날짜 · 적요 · 메모 ·
+//     방향 · 금액) 이 화면 아래에 싣고 바로 분류한다(unclassified-section.tsx). 쓰기는 기존
+//     `/api/classify` 로만 간다.
 //   - **예외: 무효 처리(상쇄) 패널(2026-09).** 두 거래를 짝지으려면 사람이 그 거래를 알아봐야
 //     해서, 무효로 표시한 쌍과 후보 쌍(같은 계좌 · 같은 금액 · 반대 방향, 많아야 20쌍)에 한해
 //     거래 일시(분 단위) · 적요 · 메모 · 금액을 보인다. 계좌번호 · 잔액은 없다. 사용자가 요청한
@@ -29,16 +31,15 @@ import { redirect } from "next/navigation";
 
 import { auth, isAllowedEmail } from "@/auth";
 import { withClient } from "@/lib/db/client.mjs";
-import { CLASSIFY_FILTERS, listClassifyGroups } from "@/lib/classify/manual.mjs";
+import { listUnclassifiedRows } from "@/lib/classify/manual.mjs";
 import { isYearMonth, listYearMonths } from "@/lib/report/months.mjs";
 import { CLASSIFY_CATEGORIES, buildMonthlyReport } from "@/lib/report/monthly.mjs";
 import { verifyMonthlyReport } from "@/lib/report/verify.mjs";
 import { listVoidCandidates, listVoidedPairs } from "@/lib/report/voids.mjs";
 
 import { MonthTabs } from "../_ui/month-tabs";
-import type { ClassifyGroup } from "../classify/forms";
 import { ReportView, type MonthlyReport, type Verification } from "./report-view";
-import { UnclassifiedSection } from "./unclassified-section";
+import { UnclassifiedSection, type UnclassifiedRow } from "./unclassified-section";
 import { VoidPanel, type VoidCandidate, type VoidedPair } from "./void-panel";
 
 // pg 는 Edge 에서 돌지 않는다.
@@ -60,8 +61,8 @@ type Loaded = {
   verification: Verification;
   voided: VoidedPair[];
   candidates: VoidCandidate[];
-  /** 그 달의 미분류 묶음(/classify 와 같은 목록). */
-  unclassified: ClassifyGroup[];
+  /** 그 달의 미분류 거래(한 건씩). */
+  unclassified: UnclassifiedRow[];
 };
 
 export default async function ReportPage({ searchParams }: PageProps<"/report">) {
@@ -112,11 +113,7 @@ export default async function ReportPage({ searchParams }: PageProps<"/report">)
       const report = await buildMonthlyReport(client, yearMonth);
       const voided = (await listVoidedPairs(client, yearMonth)) as VoidedPair[];
       const candidates = (await listVoidCandidates(client, yearMonth)) as VoidCandidate[];
-      const unclassified = (await listClassifyGroups(
-        client,
-        yearMonth,
-        CLASSIFY_FILTERS.unclassified,
-      )) as ClassifyGroup[];
+      const unclassified = (await listUnclassifiedRows(client, yearMonth)) as UnclassifiedRow[];
       return {
         months: available,
         loaded: {
@@ -170,7 +167,7 @@ export default async function ReportPage({ searchParams }: PageProps<"/report">)
       {loaded.report.거래건수 > 0 ? (
         <UnclassifiedSection
           month={loaded.yearMonth}
-          groups={loaded.unclassified}
+          rows={loaded.unclassified}
           categories={[...CLASSIFY_CATEGORIES]}
         />
       ) : null}

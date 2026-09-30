@@ -24,7 +24,7 @@ import {
   updateMemoMapping,
 } from '../lib/classify/manual.mjs';
 import { handleMappingPost, handleReclassifyPost } from '../lib/classify/http.mjs';
-import { LINE_MEMO_LIMIT, aggregateMonthly } from '../lib/report/monthly.mjs';
+import { aggregateMonthly } from '../lib/report/monthly.mjs';
 import { insertTransactions } from '../lib/db/transactions.mjs';
 import { withScratchDatabase } from './helpers/scratch-db.mjs';
 
@@ -206,7 +206,7 @@ test('HTTP: 메모 매핑 수정 · 다시 분류도 인증 · 명단 · Origin 
 
 // ── 현금흐름표 항목 줄의 메모 ─────────────────────────────────────────────
 
-test('항목 줄: 서로 다른 메모를 자주 나온 순으로 최대 LINE_MEMO_LIMIT 개, 전체 개수는 memoCount', () => {
+test('항목 줄: 같은 항목이라도 거래마다 한 줄이고 그 거래의 메모 하나를 싣는다(빈 메모 · 항목과 같은 메모는 null)', () => {
   const row = (id, memo) => ({
     id: String(id),
     account_id: 1,
@@ -223,17 +223,22 @@ test('항목 줄: 서로 다른 메모를 자주 나온 순으로 최대 LINE_ME
   });
   const memos = ['결혼식', '결혼식', '돌잔치', null, '', '장례식', '집들이', '집들이', '집들이'];
   const report = aggregateMonthly({ yearMonth: '2026-07', accounts: ACCOUNTS, rows: memos.map((memo, i) => row(i + 1, memo)) });
-  const [line] = report.항목별.변동비;
-  assert.equal(LINE_MEMO_LIMIT, 3);
-  assert.deepEqual([line.item, line.count, line.memos, line.memoCount], ['경조사', 9, ['집들이', '결혼식', '돌잔치'], 4]);
+  const lines = report.항목별.변동비;
+  // 합산하지 않는다(2026-09 사용자 요청: "적요나 메모로 겹쳐도 항목으로 합산하지 않는 것으로 변경").
+  assert.equal(lines.length, memos.length);
+  assert.ok(lines.every((line) => line.item === '경조사' && line.count === 1 && line.total === -1000));
+  assert.deepEqual(
+    lines.map((line) => line.memo),
+    ['결혼식', '결혼식', '돌잔치', null, null, '장례식', '집들이', '집들이', '집들이'],
+  );
 
-  // 항목 이름과 같은 메모는 목록에서도 개수에서도 빠진다(메모로 분류된 줄).
+  // 항목 이름과 같은 메모는 싣지 않는다(메모로 분류된 줄에서 같은 글자를 두 번 쓰지 않게).
   const named = aggregateMonthly({
     yearMonth: '2026-07',
     accounts: ACCOUNTS,
-    rows: ['집들이', '집들이', '결혼식', '돌잔치', '장례식', '생일'].map((memo, i) => ({ ...row(i + 1, memo), item: '집들이' })),
-  }).항목별.변동비[0];
-  assert.deepEqual([named.memos, named.memoCount], [['결혼식', '돌잔치', '생일'], 4]);
+    rows: ['집들이', '결혼식'].map((memo, i) => ({ ...row(i + 1, memo), item: '집들이' })),
+  }).항목별.변동비;
+  assert.deepEqual(named.map((line) => line.memo), [null, '결혼식']);
 });
 
 // ── 실제 DB ───────────────────────────────────────────────────────────────
@@ -429,11 +434,20 @@ test('실제 DB: 항목 = 메모인 메모 매핑을 만들고 분류만 고쳐�
       record(3, { memo: '길동 IRP', description: '자동이체 가상은행', txn_type: '자동이체' }),
     ]);
     const itemsOf = async () => (await rows(client)).map((r) => [r[4], r[5], r[6]]);
-    // 항목별 섹션 이름(저축은 고정지출1).
-    const lines = async (section) =>
-      aggregateMonthly({ yearMonth: '2026-07', accounts: ACCOUNTS, rows: await reportRows(client, '2026-07') }).항목별[section].map(
-        (line) => [line.category, line.item, line.count],
-      );
+    // 항목별 섹션 이름(저축은 고정지출1). 줄은 거래 한 건씩이라(2026-09) 여기서 (분류, 항목)
+    // 이름별 줄 수로 센다 — "흩어지지 않는다" = 세 거래가 모두 같은 분류 · 항목 이름이다.
+    const lines = async (section) => {
+      const counted = new Map();
+      for (const line of aggregateMonthly({
+        yearMonth: '2026-07',
+        accounts: ACCOUNTS,
+        rows: await reportRows(client, '2026-07'),
+      }).항목별[section]) {
+        const key = JSON.stringify([line.category, line.item]);
+        counted.set(key, (counted.get(key) ?? 0) + 1);
+      }
+      return [...counted].map(([key, count]) => [...JSON.parse(key), count]);
+    };
 
     // 만들기: 폼 기본값 그대로(항목 = 메모).
     assert.deepEqual(

@@ -331,7 +331,7 @@ test('미분류 입금은 수입이 아니라 변동비의 일회성 수입에 �
   assert.equal(result.수입.total, 0);
   assert.deepEqual(result.변동비.일회성수입, { total: 3500000, count: 1 });
   assert.deepEqual(result.항목별.변동비, [
-    { category: '미분류', item: '김철수', direction: 'in', total: 3500000, count: 1, memos: [], memoCount: 0 },
+    { id: '1', day: '8/10', category: '미분류', item: '김철수', direction: 'in', total: 3500000, count: 1, memo: null },
   ]);
   assert.equal(result.미분류.count, 1);
 });
@@ -599,9 +599,10 @@ test('잔액 0 은 빈 값이 아니다', () => {
 
 // ── 로그 위생 ──────────────────────────────────────────────────────────────
 
-test('결과에 거래 일시·잔액이 들어가지 않고, 적요 · 메모는 항목 줄에만 나온다', () => {
-  // 적요는 항목 이름으로(PLAN.md "적요 표시 원칙 변경"), 메모는 항목 줄의 memos 로(2026-09
-  // 사용자 요청) 화면에 나온다. 그 밖의 행 단위 값은 여전히 결과에 실리지 않는다.
+test('결과에 거래 시각·잔액이 들어가지 않고, 적요 · 메모 · 날짜는 항목 줄에만 나온다', () => {
+  // 적요는 항목 이름으로(PLAN.md "적요 표시 원칙 변경"), 메모는 항목 줄의 memo 로(2026-09
+  // 사용자 요청), 날짜는 항목 줄의 day(M/D, 시각 없음)로 화면에 나온다(2026-09 사용자 요청:
+  // "개별항목 모두 보여지게"). 그 밖의 행 단위 값은 여전히 결과에 실리지 않는다.
   const result = report([
     row({
       id: '1',
@@ -639,7 +640,7 @@ test('결과에 거래 일시·잔액이 들어가지 않고, 적요 · 메모�
       return copy;
     }),
   });
-  for (const text of ['김철수', '이영희', '비밀메모']) {
+  for (const text of ['김철수', '이영희', '비밀메모', '8/10']) {
     assert.ok(!withoutLines.includes(text), `${text} 이(가) 항목 줄 밖에 나왔다`);
   }
   assert.deepEqual(
@@ -647,8 +648,11 @@ test('결과에 거래 일시·잔액이 들어가지 않고, 적요 · 메모�
     ['김철수', '이영희'],
   );
   assert.deepEqual(
-    항목별.변동비.map((line) => line.memos),
-    [['비밀메모'], []],
+    항목별.변동비.map((line) => [line.day, line.memo]),
+    [
+      ['8/10', '비밀메모'],
+      ['8/20', null],
+    ],
   );
 });
 

@@ -98,11 +98,6 @@ export function VoidPanel({
     <section className="flex flex-col gap-3" data-testid="void-panel" data-month={yearMonth} aria-labelledby="void-title">
       <h2 id="void-title" className="flex items-center gap-2 text-[13px] font-semibold text-fg">
         무효 처리
-        {voided.length > 0 ? (
-          <span className="rounded border border-line bg-subtle px-1.5 text-xs font-medium text-muted tabular-nums">
-            {voided.length}쌍
-          </span>
-        ) : null}
       </h2>
       {message !== null ? (
         <p
@@ -147,7 +142,6 @@ export function VoidPanel({
         title="같은 날(한국 시각) · 같은 계좌 · 같은 금액 · 반대 방향"
       >
         후보
-        <span className="ml-1.5 tabular-nums">{candidates.length}</span>
         <span className="sr-only"> (같은 날 · 같은 계좌 · 같은 금액 · 반대 방향)</span>
       </h3>
       {candidates.length === 0 ? (

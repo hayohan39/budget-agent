@@ -46,8 +46,10 @@
 //
 // ── 여기에 없는 것 ────────────────────────────────────────────────────────
 //
-// 행 단위 내역이 없다. 거래 일시 · 잔액 · 메모 · 계좌번호 · 뒤 4자리는 이
-// 파일이 받는 데이터에 애초에 들어 있지 않다.
+// 잔액 · 계좌번호 · 뒤 4자리 · 거래 시각(시:분)은 이 파일이 받는 데이터에 애초에 들어 있지
+// 않다. 2026-09(사용자 요청: "적요나 메모로 겹쳐도 항목으로 합산하지 않는 것으로 변경. 개별항목
+// 모두 보여지게. n건 표시는 이제 제거")부터 항목 줄은 **거래 한 건**이고, 줄마다 날짜(`M/D`) ·
+// 항목 · 그 거래의 메모 · 금액이 보인다. 건수는 어디에도 그리지 않는다.
 //
 // 원본의 `선용 월급` · `지현 ISA` 같은 **항목 줄**은 집계의 `항목별` ·
 // `계좌블록[].항목` 에서 온다. 사람이 /classify 에서 항목 이름을 정하지 않았으면
@@ -73,23 +75,36 @@ type SectionItem = {
   count: number;
   tag?: string;
   flow?: string;
-  memos?: string[];
-  memoCount?: number;
 };
 
 /**
- * `항목별` 의 한 줄. (분류, 항목, 방향) 단위다. 같은 항목의 입금과 출금은 서로
- * 다른 줄이다 — 한 줄 안에서 부호가 섞이지 않는다.
+ * `항목별` 의 한 줄 = **거래 한 건**(2026-09 사용자 요청: "적요나 메모로 겹쳐도 항목으로
+ * 합산하지 않는 것으로 변경. 개별항목 모두 보여지게"). 합산하지 않으므로 같은 항목의 거래도
+ * 각자 한 줄이다.
  */
 type Line = {
+  /** 거래 id. 표의 React key 로만 쓴다. */
+  id: string;
+  /** 한국 시각 날짜 `M/D`(예: `9/15`). 모르면 null. */
+  day: string | null;
   category: string;
   item: string;
   direction: "in" | "out";
   total: number;
   count: number;
-  /** 그 줄 거래들의 서로 다른 메모(상위 몇 개, lib/report/monthly.mjs 의 LINE_MEMO_LIMIT)와 전체 개수. */
-  memos: string[];
-  memoCount: number;
+  /** 그 거래의 메모(정규화). 없거나 항목과 같으면 null. */
+  memo: string | null;
+};
+
+/** 표의 거래 줄 하나. */
+type RowItem = {
+  id: string;
+  day: string | null;
+  key: string;
+  total: number;
+  memo: string | null;
+  tag?: string;
+  flow?: string;
 };
 
 const DIRECTION_TEXT: Record<Line["direction"], string> = { in: "입금", out: "출금" };
@@ -101,33 +116,29 @@ const DIRECTION_TEXT: Record<Line["direction"], string> = { in: "입금", out: "
  * 방향 꼬리표를 붙인다. 같은 항목 이름의 입금 줄과 출금 줄이 한 표에 나란히
  * 있을 때(예: 수입으로 고른 적요의 반환 출금) 둘을 구별하게 해 준다.
  */
-function linesAsItems(lines: Line[], kind?: string, natural: Line["direction"] = "out"): SectionItem[] {
+function linesAsItems(lines: Line[], kind?: string, natural: Line["direction"] = "out"): RowItem[] {
   return lines.map((line) => ({
+    id: line.id,
+    day: line.day,
     key: line.item,
     total: line.total,
-    count: line.count,
+    memo: line.memo,
     tag: kind !== undefined && line.category === kind ? undefined : line.category,
     flow: line.direction === natural ? undefined : DIRECTION_TEXT[line.direction],
-    memos: line.memos,
-    memoCount: line.memoCount,
   }));
 }
 
 /**
  * 항목 이름 아래의 메모(2026-09, 사용자 요청: "메모도 중요한 정보야. sub text 로 항목 아래
- * 작은 회색글씨로"). 한 줄에 서로 다른 메모가 여럿이면 자주 나온 몇 개만 보이고 나머지는
- * 개수로 줄인다. 메모는 적요처럼 이 화면에만 그린다(로그 · 에러에 싣지 않는다).
+ * 작은 회색글씨로"). 거래 한 건의 메모 하나다. 메모는 적요처럼 이 화면에만 그린다(로그 ·
+ * 에러에 싣지 않는다).
  */
-function MemoNote({ memos, memoCount, item }: { memos?: string[]; memoCount?: number; item: string }) {
-  if (memos === undefined || memos.length === 0) return null;
-  const more = (memoCount ?? memos.length) - memos.length;
+function MemoNote({ memo, item }: { memo: string | null; item: string }) {
   // 메모가 곧 항목 이름인 줄(메모로 분류된 저축 등)은 같은 글자를 두 번 쓰지 않는다.
-  const shown = memos.filter((memo) => memo !== item);
-  if (shown.length === 0 && more <= 0) return null;
+  if (memo === null || memo === "" || memo === item) return null;
   return (
     <span data-testid="item-memo" className="mt-0.5 block text-xs text-faint">
-      {shown.join(" · ")}
-      {more > 0 ? `${shown.length > 0 ? " " : ""}외 메모 ${more}개` : ""}
+      {memo}
     </span>
   );
 }
@@ -325,21 +336,33 @@ function CategoryTag({ tag }: { tag: string }) {
   return <span className="mr-1 rounded border border-line bg-subtle px-1 text-muted">{tag}</span>;
 }
 
-/** 항목 줄의 가운데 칸 — 항목 이름, 그 아래 분류 · 방향 꼬리표와 건수. */
-function ItemCell({ item }: { item: SectionItem }) {
+/**
+ * 거래 줄의 가운데 칸 — 날짜(작게) · 항목 이름, 그 아래 메모, 분류 · 방향 꼬리표.
+ * 건수는 없다(2026-09 사용자 요청: "n건 표시는 이제 제거") — 한 줄이 곧 한 건이다.
+ */
+function ItemCell({ item }: { item: RowItem }) {
+  const hasTags = item.tag !== undefined || item.flow !== undefined;
   return (
     <td className={`${CELL} break-keep wrap-anywhere`}>
-      <span className="block">{item.key}</span>
-      <MemoNote memos={item.memos} memoCount={item.memoCount} item={item.key} />
-      <span className="mt-0.5 block text-xs text-muted tabular-nums">
-        {item.tag !== undefined ? <CategoryTag tag={item.tag} /> : null}
-        {item.flow !== undefined ? (
-          <span className="mr-1 rounded border border-line bg-accent-bg px-1 text-accent-text">
-            {item.flow}
+      <span className="block">
+        {item.day !== null ? (
+          <span data-testid="item-day" className="mr-1.5 text-xs text-muted tabular-nums">
+            {item.day}
           </span>
         ) : null}
-        {item.count}건
+        {item.key}
       </span>
+      <MemoNote memo={item.memo} item={item.key} />
+      {hasTags ? (
+        <span className="mt-0.5 block text-xs text-muted">
+          {item.tag !== undefined ? <CategoryTag tag={item.tag} /> : null}
+          {item.flow !== undefined ? (
+            <span className="mr-1 rounded border border-line bg-accent-bg px-1 text-accent-text">
+              {item.flow}
+            </span>
+          ) : null}
+        </span>
+      ) : null}
     </td>
   );
 }
@@ -358,7 +381,7 @@ function KindTable({
   caption,
 }: {
   kind: string;
-  items: SectionItem[];
+  items: RowItem[];
   total: number;
   tone?: keyof typeof TONE;
   caption: string;
@@ -381,7 +404,7 @@ function KindTable({
             </tr>
           ) : (
             items.map((item, index) => (
-              <tr key={`${item.tag ?? ""}\u001f${item.key}\u001f${item.flow ?? ""}`}>
+              <tr key={item.id}>
                 {index === 0 ? (
                   <th scope="row" rowSpan={items.length} className={KIND}>
                     {kind}
@@ -418,7 +441,7 @@ function VariableTable({
   section: MonthlyReport["변동비"];
   caption: string;
 }) {
-  const groups: Array<{ kind: string; direction: Line["direction"]; items: SectionItem[] }> = [
+  const groups: Array<{ kind: string; direction: Line["direction"]; items: RowItem[] }> = [
     { kind: "일회성 수입", direction: "in", items: [] },
     { kind: "일회성 지출", direction: "out", items: [] },
   ];
@@ -455,7 +478,7 @@ function VariableTable({
           ) : (
             shown.flatMap((group) =>
               group.items.map((item, index) => (
-                <tr key={`${group.direction}\u001f${item.tag ?? ""}\u001f${item.key}`}>
+                <tr key={item.id}>
                   {index === 0 ? (
                     <th scope="row" rowSpan={group.items.length} className={KIND}>
                       {group.kind}
@@ -528,46 +551,31 @@ function AccountTable({
               <td className={NUM}>&nbsp;</td>
             </tr>
           ) : (
-            lines.map((line, index) => (
-              <tr key={`${line.category}\u001f${line.item}\u001f${line.direction}`}>
+            linesAsItems(lines, block.nickname).map((item, index) => (
+              <tr key={item.id}>
                 {index === 0 ? (
                   <th scope="row" rowSpan={lines.length} className={KIND}>
                     {block.nickname}
                   </th>
                 ) : null}
-                <td className={`${CELL} break-keep wrap-anywhere`}>
-                  <span className="block">{line.item}</span>
-                  <MemoNote memos={line.memos} memoCount={line.memoCount} item={line.item} />
-                  <span className="mt-0.5 block text-xs text-muted tabular-nums">
-                    {line.category !== block.nickname ? <CategoryTag tag={line.category} /> : null}
-                    {line.count}건
-                  </span>
-                </td>
-                <td className={NUM}><Amount value={line.total} /></td>
+                <ItemCell item={item} />
+                <td className={NUM}><Amount value={item.total} /></td>
               </tr>
             ))
           )}
           <WideRow label="집행 합계" value={<Amount value={block.집행.total} />} />
           <WideRow label="이자" value={<Amount value={block.이자.total} />} />
           {block.금고저축.count > 0 ? (
-            <WideRow
-              label="금고저축"
-              value={<Amount value={block.금고저축.total} />}
-              tags={<Tag hint="계좌 → 금고">{block.금고저축.count}건</Tag>}
-            />
+            <WideRow label="금고저축" hint="계좌 → 금고" value={<Amount value={block.금고저축.total} />} />
           ) : null}
           {block.금고인출.count > 0 ? (
-            <WideRow
-              label="금고 인출"
-              value={<Amount value={block.금고인출.total} />}
-              tags={<Tag hint="금고 → 계좌">{block.금고인출.count}건</Tag>}
-            />
+            <WideRow label="금고 인출" hint="금고 → 계좌" value={<Amount value={block.금고인출.total} />} />
           ) : null}
           {block.무효.count > 0 ? (
             <WideRow
               label="무효 처리"
               value={<Amount value={block.무효.total} />}
-              tags={<Tag hint="순증감에서 제외">{block.무효.count}건</Tag>}
+              tags={<Tag>순증감 제외</Tag>}
             />
           ) : null}
           <WideRow
@@ -695,7 +703,7 @@ export function VerifyBanner({
 }: {
   verification: Verification;
   mainNickname: string | null;
-  /** 이 달 미분류 건수. 0 보다 크면 아래 미분류 목록으로 가는 링크를 붙인다. */
+  /** 이 달 미분류 건수. 0 보다 크면 아래 미분류 목록으로 가는 링크를 붙인다(건수는 그리지 않는다). */
   unclassified?: number;
 }) {
   const account = mainNickname ?? "메인";
@@ -706,7 +714,7 @@ export function VerifyBanner({
         data-testid="unclassified-link"
         className="inline-flex h-7 items-center rounded-md border border-warn-line bg-warn-bg px-2 text-xs font-medium text-warn hover:underline"
       >
-        미분류 {unclassified}건
+        미분류 있음
       </a>
     ) : null;
 
@@ -785,11 +793,8 @@ export function ReportView({
 
   // 카드비 표 — 원본의 변동비 표처럼 카드사별 줄만 있다. 일회성 항목은
   // 아래 변동비 표(VariableTable)로 따로 간다.
-  const cardItems: SectionItem[] = card.issuers.map((issuer) => ({
-    key: issuer.issuer,
-    total: issuer.total,
-    count: issuer.count,
-  }));
+  // 2026-09: 카드사별로 더하지 않고 카드대금 출금 한 건이 한 줄이다(항목 = 카드사).
+  const cardItems = linesAsItems(lines.카드비, "카드대금");
   const fixed2Shown = fixed2.filter((item) => item.count > 0);
 
   // 종합정산. 원본의 `고정비` · `비상금` 줄은 그 계좌로 **옮긴 돈**이다.
@@ -817,11 +822,7 @@ export function ReportView({
   // 무효(상쇄)로 표시한 메인 계좌 거래. 같은 달의 쌍이면 0 이고, 달을 걸친 쌍이면 이 달에
   // 남은 한쪽 금액이다(메인 잔액이 실제로 움직였다). 건이 있을 때만 그린다.
   if (report.무효처리.count > 0) {
-    summaryRows.push({
-      label: "무효 처리",
-      value: report.종합정산.무효처리,
-      tags: <Tag>{report.무효처리.count}건</Tag>,
-    });
+    summaryRows.push({ label: "무효 처리", value: report.종합정산.무효처리 });
   }
 
   const shown = summaryRows.reduce((sum, item) => sum + item.value, 0);
@@ -1011,9 +1012,6 @@ export function ReportView({
                   <th scope="col" className={HEAD_NUM}>
                     변화
                   </th>
-                  <th scope="col" className={HEAD_NUM}>
-                    건수
-                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -1034,7 +1032,6 @@ export function ReportView({
                       <td className={NUM}>
                         <Amount value={entry.change} />
                       </td>
-                      <td className={`${NUM} text-muted`}>{entry.count}건</td>
                     </tr>
                   );
                 })}
