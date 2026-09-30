@@ -329,8 +329,9 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
       <section className="flex flex-col gap-2">
         <h2 className="text-[13px] font-semibold text-fg">저장된 패턴</h2>
         <p className="text-xs text-muted">
-          ‘앞으로도’에서 ‘패턴으로 저장’을 고른 것들입니다. <code>#</code> 는 숫자 한 자리, <code>*</code> 는 아무
-          글자입니다. 정확한 적요로 저장한 매핑이 패턴보다 먼저 걸리고, 여러 패턴이 맞으면 # · * 가 아닌 글자가
+          ‘앞으로도’에서 ‘패턴으로 저장’을 고른 것들입니다(‘메모’ 표시는 메모에 거는 패턴). <code>#</code> 는 숫자 한
+          자리, <code>*</code> 는 아무 글자입니다. 정확한 적요 · 메모로 저장한 매핑이 패턴보다 먼저 걸리고, 메모 패턴이 적요
+          패턴보다 먼저이며, 여러 패턴이 맞으면 # · * 가 아닌 글자가
           많은 패턴이, 같으면 먼저 만든 패턴이 이깁니다. 지우면 이 패턴으로 분류된 거래가 다시 분류됩니다(‘이번만’으로
           고른 거래는 그대로).
         </p>
@@ -339,7 +340,7 @@ export default async function ClassifyPage({ searchParams }: PageProps<"/classif
         ) : (
           <ul className="flex flex-col gap-2">
             {loaded.patterns.map((saved) => (
-              <li key={`${saved.direction}\u001f${saved.pattern}`}>
+              <li key={`${saved.basis}\u001f${saved.direction}\u001f${saved.pattern}`}>
                 <PatternRow saved={saved} categories={categories} />
               </li>
             ))}
