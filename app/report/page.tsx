@@ -16,23 +16,29 @@
 //     pg 메시지에는 호스트명과 값이 섞여 나온다.
 //   - 화면에 나가는 것은 집계뿐이다. 행 단위 내역 · 거래 일시 · 계좌번호는 없다.
 //     단, 항목 줄의 이름은 사람이 정하지 않았으면 **정규화한 적요**다(사용자가
-//     요청한 변경. PLAN.md "적요 표시 원칙 변경"). 미분류는 건수와 /classify 링크.
+//     요청한 변경. PLAN.md "적요 표시 원칙 변경").
+//   - **미분류 섹션(2026-09).** 그 달의 미분류 묶음을 /classify 와 같은 모양(계좌 별칭 · 적요 ·
+//     메모 · 방향별 건수 · 합계)으로 이 화면 아래에 싣고 바로 분류한다(unclassified-section.tsx).
+//     쓰기는 기존 `/api/classify` 로만 간다.
 //   - **예외: 무효 처리(상쇄) 패널(2026-09).** 두 거래를 짝지으려면 사람이 그 거래를 알아봐야
 //     해서, 무효로 표시한 쌍과 후보 쌍(같은 계좌 · 같은 금액 · 반대 방향, 많아야 20쌍)에 한해
 //     거래 일시(분 단위) · 적요 · 메모 · 금액을 보인다. 계좌번호 · 잔액은 없다. 사용자가 요청한
 //     기능이고 이 화면(로그인 + 화이트리스트, 동적 렌더)에만 그린다(app/report/void-panel.tsx).
-import Form from "next/form";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { auth, isAllowedEmail } from "@/auth";
 import { withClient } from "@/lib/db/client.mjs";
+import { CLASSIFY_FILTERS, listClassifyGroups } from "@/lib/classify/manual.mjs";
 import { isYearMonth, listYearMonths } from "@/lib/report/months.mjs";
-import { buildMonthlyReport } from "@/lib/report/monthly.mjs";
+import { CLASSIFY_CATEGORIES, buildMonthlyReport } from "@/lib/report/monthly.mjs";
 import { verifyMonthlyReport } from "@/lib/report/verify.mjs";
 import { listVoidCandidates, listVoidedPairs } from "@/lib/report/voids.mjs";
 
+import { MonthTabs } from "../_ui/month-tabs";
+import type { ClassifyGroup } from "../classify/forms";
 import { ReportView, type MonthlyReport, type Verification } from "./report-view";
+import { UnclassifiedSection } from "./unclassified-section";
 import { VoidPanel, type VoidCandidate, type VoidedPair } from "./void-panel";
 
 // pg 는 Edge 에서 돌지 않는다.
@@ -47,38 +53,6 @@ function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
-function MonthPicker({ months, selected }: { months: string[]; selected: string }) {
-  // 고른 달이 목록에 없을 수도 있다(거래가 없는 달을 주소로 직접 물은 경우).
-  // 그 값도 선택지로 남겨 둬야 화면과 주소가 어긋나지 않는다.
-  const options = months.includes(selected) ? months : [selected, ...months];
-
-  return (
-    <Form action="/report" className="flex items-center gap-2">
-      <label htmlFor="month" className="text-[13px] text-muted">
-        조회 월
-      </label>
-      <select
-        id="month"
-        name="month"
-        defaultValue={selected}
-        className="h-8 rounded-md border border-control bg-canvas px-2 text-[13px]"
-      >
-        {options.map((month) => (
-          <option key={month} value={month}>
-            {month}
-          </option>
-        ))}
-      </select>
-      <button
-        type="submit"
-        className="h-8 rounded-md border border-line-strong bg-canvas px-3 text-[13px] font-medium hover:bg-hover"
-      >
-        보기
-      </button>
-    </Form>
-  );
-}
-
 type Loaded = {
   months: string[];
   yearMonth: string;
@@ -86,6 +60,8 @@ type Loaded = {
   verification: Verification;
   voided: VoidedPair[];
   candidates: VoidCandidate[];
+  /** 그 달의 미분류 묶음(/classify 와 같은 목록). */
+  unclassified: ClassifyGroup[];
 };
 
 export default async function ReportPage({ searchParams }: PageProps<"/report">) {
@@ -136,9 +112,22 @@ export default async function ReportPage({ searchParams }: PageProps<"/report">)
       const report = await buildMonthlyReport(client, yearMonth);
       const voided = (await listVoidedPairs(client, yearMonth)) as VoidedPair[];
       const candidates = (await listVoidCandidates(client, yearMonth)) as VoidCandidate[];
+      const unclassified = (await listClassifyGroups(
+        client,
+        yearMonth,
+        CLASSIFY_FILTERS.unclassified,
+      )) as ClassifyGroup[];
       return {
         months: available,
-        loaded: { months: available, yearMonth, report, verification: verifyMonthlyReport(report), voided, candidates },
+        loaded: {
+          months: available,
+          yearMonth,
+          report,
+          verification: verifyMonthlyReport(report),
+          voided,
+          candidates,
+          unclassified,
+        },
       };
     });
     months = outcome.months;
@@ -157,9 +146,7 @@ export default async function ReportPage({ searchParams }: PageProps<"/report">)
   if (loaded === null) {
     return (
       <Shell>
-        <p className="text-[13px] text-muted">
-          아직 저장된 거래가 없습니다. 거래내역을 먼저 올려주세요.
-        </p>
+        <p className="text-[13px] text-muted">저장된 거래 없음</p>
         <Link
           href="/import"
           className="self-start inline-flex h-9 items-center rounded-md border border-line-strong bg-canvas px-4 text-[13px] font-medium hover:bg-hover"
@@ -172,14 +159,21 @@ export default async function ReportPage({ searchParams }: PageProps<"/report">)
 
   return (
     <Shell>
-      <MonthPicker months={months} selected={loaded.yearMonth} />
+      <MonthTabs months={months} selected={loaded.yearMonth} basePath="/report" />
       {loaded.report.거래건수 === 0 ? (
-        <p className="text-[13px] text-muted">
-          {loaded.yearMonth} 에 저장된 거래가 없습니다. 다른 달을 골라 주세요.
+        <p className="text-[13px] text-muted" data-testid="empty-month">
+          거래 없음
         </p>
       ) : (
         <ReportView report={loaded.report} verification={loaded.verification} />
       )}
+      {loaded.report.거래건수 > 0 ? (
+        <UnclassifiedSection
+          month={loaded.yearMonth}
+          groups={loaded.unclassified}
+          categories={[...CLASSIFY_CATEGORIES]}
+        />
+      ) : null}
       {loaded.report.거래건수 > 0 || loaded.voided.length > 0 ? (
         <VoidPanel yearMonth={loaded.yearMonth} voided={loaded.voided} candidates={loaded.candidates} />
       ) : null}

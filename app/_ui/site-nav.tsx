@@ -16,7 +16,7 @@ export const NAV_PAGES = [
   { href: "/", label: "홈" },
   { href: "/import", label: "거래내역 올리기" },
   { href: "/report", label: "월별 현금흐름" },
-  { href: "/classify", label: "분류 정리" },
+  { href: "/classify", label: "분류 규칙" },
   { href: "/stats", label: "통계" },
 ] as const;
 

@@ -89,7 +89,8 @@ export function TrendChart({
 }: {
   id: string;
   title: string;
-  note: string;
+  /** 제목 옆의 짧은 꼬리표(예: `이체 포함`). 없으면 그리지 않는다. */
+  note?: string;
   bars: TrendBar[];
 }) {
   const present = bars.filter((bar): bar is { yearMonth: string; value: number } => bar.value !== null);
@@ -116,7 +117,9 @@ export function TrendChart({
       <figcaption className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-line px-3 py-2">
         <span id={titleId} className="text-[13px] font-semibold">
           {title}
-          <span className="ml-2 text-xs font-normal text-muted">{note}</span>
+          {note !== undefined ? (
+            <span className="ml-2 rounded border border-line bg-subtle px-1 text-xs font-normal text-muted">{note}</span>
+          ) : null}
         </span>
         {latest !== undefined ? (
           <span className="text-[13px]">

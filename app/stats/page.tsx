@@ -44,14 +44,13 @@ const RANGE_TEXT: Record<string, string> = {
   all: "전체",
 };
 
-/** 그래프 머리의 작은 설명. 어느 현금흐름표 줄에서 왔는지. */
-const NOTE: Record<SeriesKey, string> = {
-  수입: "메인 계좌로 들어온 돈 · 내 계좌 간 이체 · 일회성 수입 제외",
-  저축: "나간 돈",
-  주거비: "나간 돈",
-  고정비: "나간 돈 · 고정비 계좌로 옮긴 돈 포함",
-  카드비: "나간 돈 · 카드대금",
-  변동비: "일회성 지출 − 일회성 수입 · 미분류 포함 · 음수면 수입이 더 컸던 달",
+/**
+ * 그래프 제목 옆의 짧은 꼬리표. 2026-09(사용자 요청: "설명을 위한 글들은 제거해줘")에
+ * 설명 문장을 걷어 내고, 현금흐름표와 같은 이름의 꼬리표만 남겼다.
+ */
+const NOTE: Partial<Record<SeriesKey, string>> = {
+  고정비: "이체 포함",
+  변동비: "미분류 포함",
 };
 
 function Shell({ children }: { children: React.ReactNode }) {
@@ -101,9 +100,6 @@ function TrendTable({ points }: { points: TrendPoint[] }) {
       <table className="w-full border-collapse text-[13px] [&>tbody>tr:last-child>*]:border-b-0">
         <caption className="border-b border-line px-3 py-2 text-left text-[13px] font-semibold text-fg">
           표로 보기
-          <span className="ml-2 text-xs font-normal text-muted">
-            수입은 들어온 돈, 나머지는 나간 돈의 크기입니다(변동비는 일회성 수입을 뺀 값)
-          </span>
         </caption>
         <thead>
           <tr>
@@ -188,7 +184,7 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
       {points.length === 0 ? (
         <>
           <p className="text-[13px] text-muted">
-            아직 저장된 거래가 없습니다. 거래내역을 먼저 올려주세요.
+            저장된 거래 없음
           </p>
           <Link
             href="/import"
@@ -199,16 +195,6 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
         </>
       ) : (
         <>
-          <p className="text-xs text-muted">
-            달마다 월별 현금흐름표와 같은 집계에서 나온 값입니다. 수입은 메인 계좌로 들어온
-            돈이고(메인 ↔ 고정비 · 비상금 계좌 사이의 이체와 그 계좌들의 입금 · 이자, 변동비로
-            분류한 일회성 수입 · 미분류 입금은 넣지 않습니다), 저축 · 주거비 · 고정비 · 카드비는
-            나간 돈의 크기입니다. 변동비는 일회성 지출에서 일회성 수입을 뺀 값이라 수입이 더
-            큰 달에는 음수입니다. 고정비는 현금흐름표 종합정산의 ‘고정비(계좌 이체 포함)’ 줄과
-            같습니다. 막대에 마우스를
-            올리거나 Tab 으로 옮기면 값이 보이고, 모든 값은 아래 표에도 있습니다.
-            {points.length === 1 ? " 아직 한 달치 자료뿐이라 추이 대신 그 달 값만 보입니다." : ""}
-          </p>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {TREND_SERIES.map((series, index) => (
               <TrendChart

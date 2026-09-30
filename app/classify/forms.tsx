@@ -207,6 +207,25 @@ function AccountBadge({ account }: { account: GroupAccount | null }) {
 }
 
 /**
+ * 묶음 머리의 짧은 상태 꼬리표(2026-09: 묶음 아래 설명 문단을 걷어 내고 둔다).
+ * `hint` 는 마우스를 올리면 보이고(title) 화면 읽기 프로그램에는 괄호 안 글로 읽힌다.
+ */
+function GroupHint({ text, hint, tone = "accent" }: { text: string; hint: string; tone?: "accent" | "warn" }) {
+  return (
+    <span
+      title={hint}
+      data-testid="group-hint"
+      className={`rounded border px-1 tabular-nums ${
+        tone === "warn" ? "border-warn-line bg-warn-bg text-warn" : "border-line bg-accent-bg text-accent-text"
+      }`}
+    >
+      {text}
+      <span className="sr-only"> ({hint})</span>
+    </span>
+  );
+}
+
+/**
  * 한 묶음의 입력. 분류는 드롭다운 하나로만 고른다(예전 ‘기타’ 는 ‘변동비’ 로 합쳤다).
  *
  * ── 빠르게 보이기(2026-09) ──
@@ -330,7 +349,7 @@ export function GroupForm({
           <GroupMemo memo={group.memo} />
         </span>
         <span role="status">
-          {status.kind === "done" ? `${status.text} 목록에서 뺐습니다.` : `‘${category}’(으)로 적용하는 중…`}
+          {status.kind === "done" ? `✓ ${status.text}` : `‘${category}’ 적용 중…`}
         </span>
       </div>
     );
@@ -354,33 +373,38 @@ export function GroupForm({
           {group.count}건 · {FLOW.format(group.total)}원
         </p>
       </div>
-      <p className="text-xs text-muted">
-        현재: {current} · 항목: {group.mixedItem ? "혼합" : (group.item ?? "—")}
-        {group.unclassified > 0 && group.unclassified < group.count
-          ? ` · 미분류 ${group.unclassified}건`
-          : ""}
-        {group.manual > 0 ? ` · ‘이번만’으로 고른 거래 ${group.manual}건` : ""}
+      <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted" data-testid="group-meta">
+        <span
+          data-testid="group-current"
+          className={`rounded border px-1 ${
+            group.category === null && !group.mixed
+              ? "border-warn-line bg-warn-bg text-warn"
+              : "border-line bg-subtle text-soft"
+          }`}
+        >
+          {current}
+        </span>
+        {/* 미분류 묶음의 항목은 적요 그대로라 같은 글자를 두 번 쓰지 않는다. */}
+        {group.mixedItem || (group.item !== null && group.item !== group.key) ? (
+          <span>항목 {group.mixedItem ? "혼합" : group.item}</span>
+        ) : null}
+        {group.unclassified > 0 && group.unclassified < group.count ? (
+          <span className="tabular-nums">미분류 {group.unclassified}건</span>
+        ) : null}
+        {group.manual > 0 ? <span className="tabular-nums">이번만 {group.manual}건</span> : null}
+        {group.transferIn > 0 ? (
+          <GroupHint text={`이체 입금 ${group.transferIn}`} hint="메인에서 옮겨 온 돈 · 미분류 아님" />
+        ) : null}
+        {group.vault > 0 ? (
+          <GroupHint
+            text={`${group.direction === "out" ? "금고저축" : "금고 인출"} ${group.vault}`}
+            hint={group.direction === "out" ? "계좌 → 금고 · 미분류 아님" : "금고 → 계좌 · 미분류 아님"}
+          />
+        ) : null}
+        {group.transfer > 0 ? (
+          <GroupHint text={`계좌간 이동 ${group.transfer}`} hint="분류와 무관하게 계좌간이동으로 집계" tone="warn" />
+        ) : null}
       </p>
-      {group.transferIn > 0 ? (
-        <p className="text-xs text-accent-text">
-          이 중 {group.transferIn}건은 메인 계좌에서 옮겨 온 돈(내 계좌 간 이체)으로 확인됐습니다.
-          분류하지 않아도 현금흐름표의 ‘{accountLabel(group.account)}’ 입금으로 들어가므로 미분류로
-          세지 않습니다.
-        </p>
-      ) : null}
-      {group.vault > 0 ? (
-        <p className="text-xs text-accent-text">
-          {group.direction === "out"
-            ? `이 중 ${group.vault}건은 ${accountLabel(group.account)}에 연결된 금고로 옮긴 돈(금고저축)으로 봅니다. 분류와 무관하게 현금흐름표 ‘${accountLabel(group.account)}’ 표의 ‘금고저축’ 줄로 들어가고 쓴 돈(집행)으로 세지 않으므로, 미분류로도 세지 않습니다.`
-            : `이 중 ${group.vault}건은 ${accountLabel(group.account)}에 연결된 금고에서 꺼낸 돈(금고 인출)으로 봅니다. 분류와 무관하게 현금흐름표 ‘${accountLabel(group.account)}’ 표의 ‘금고 인출’ 줄로 들어가고 메인에서 온 입금으로 세지 않으므로, 미분류로도 세지 않습니다.`}
-        </p>
-      ) : null}
-      {group.transfer > 0 ? (
-        <p className="text-xs text-warn">
-          내 계좌 간 이동으로 표시된 거래가 {group.transfer}건 있습니다. 이 거래들은 분류와
-          무관하게 현금흐름표의 ‘계좌간이동’ 줄에 들어갑니다.
-        </p>
-      ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <label htmlFor={`category-${uid}`} className="text-xs text-muted">
           분류
@@ -450,20 +474,13 @@ export function GroupForm({
         {scope === "always" ? (
           <label className="flex items-center gap-1 text-xs text-muted">
             <input type="checkbox" checked={usePattern} onChange={(event) => setUsePattern(event.target.checked)} />
-            달마다 바뀌는 부분이 있어요 — 패턴으로 저장
+            패턴으로 저장
           </label>
         ) : null}
         <button type="submit" className={BUTTON} disabled={status.kind === "busy"}>
           {status.kind === "busy" ? "저장 중…" : "적용"}
         </button>
       </div>
-      {byMemo && !usePattern ? (
-        <p className="text-xs text-muted">
-          메모가 <strong>{group.memo}</strong> 인 {DIRECTION_TEXT[group.direction]} 거래라면 적요 · 계좌 · 달과
-          무관하게 이 분류를 붙입니다(‘이번만’으로 고른 거래는 그대로). 메모 기준 매핑은 적요 기준 매핑보다 먼저
-          걸립니다.
-        </p>
-      ) : null}
       {scope === "always" && usePattern ? (
         <PatternEditor
           // 기준이 바뀌면 미리보기 상태를 새로 시작한다.
@@ -555,7 +572,6 @@ function PatternEditor({
   }, [wanted, subject, basis]);
 
   const current = preview !== null && wanted !== null && preview.pattern === wanted ? preview : null;
-  const other: Direction = direction === "out" ? "in" : "out";
 
   return (
     <div className="flex flex-col gap-1 rounded-md border border-line bg-subtle p-2 text-xs" data-testid="pattern-editor">
@@ -573,44 +589,39 @@ function PatternEditor({
           spellCheck={false}
         />
       </div>
-      <p className="text-muted">
-        <code>#</code> 는 숫자 한 자리, <code>*</code> 는 아무 글자 여러 개(없어도 됨)입니다. 나머지는 글자 그대로
-        비교하고, {target} 전체와 맞아야 합니다.{" "}
-        {basis === "memo" ? (
-          <>
-            예: 길동 IRP 01회 · 길동 IRP 02회 → <code>길동 IRP ##회</code>
-          </>
-        ) : (
-          <>
-            예: 흥국01184 · 흥국02184 → <code>흥국##184</code>
-          </>
-        )}
+      <p className="flex flex-wrap gap-3 text-muted" data-testid="pattern-legend">
+        <span>
+          <kbd className="rounded border border-line-strong bg-canvas px-1 font-mono text-fg">#</kbd> 숫자 1자리
+        </span>
+        <span>
+          <kbd className="rounded border border-line-strong bg-canvas px-1 font-mono text-fg">*</kbd> 아무 글자
+        </span>
       </p>
       {localError !== null ? (
         <p role="alert" className="text-danger">
           {localError}
         </p>
       ) : current === null ? (
-        <p className="text-muted">맞는 거래를 세는 중…</p>
+        <p className="text-muted">세는 중…</p>
       ) : current.failed || current.data === null ? (
-        <p className="text-muted">미리보기를 불러오지 못했습니다. 저장은 할 수 있습니다.</p>
+        <p className="text-muted">미리보기 실패 · 저장은 가능</p>
       ) : (
-        <div data-testid="pattern-preview" className="text-muted">
-          <p>
-            이미 올린 거래 중 이 패턴에 맞는 <strong>{DIRECTION_TEXT[direction]}</strong>{" "}
-            {current.data[direction].count}건(서로 다른 {target} {current.data[direction].distinct}개)
-            {current.data[direction].manual > 0
-              ? ` — 그중 ‘이번만’으로 고른 ${current.data[direction].manual}건은 바꾸지 않습니다`
-              : ""}
-            {current.data[direction].samples.length > 0 ? ` · 예: ${current.data[direction].samples.join(", ")}` : ""}
-          </p>
-          {current.data[other].count > 0 ? (
-            <p className="text-muted">
-              같은 패턴의 {DIRECTION_TEXT[other]} {current.data[other].count}건은 이 저장과 무관합니다(패턴은 이
-              묶음의 방향에만 걸립니다).
-            </p>
+        <p data-testid="pattern-preview" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted">
+          <span className="font-medium text-fg tabular-nums">
+            {DIRECTION_TEXT[direction]} {current.data[direction].count}건 일치
+          </span>
+          <span className="tabular-nums">{target} {current.data[direction].distinct}종</span>
+          {current.data[direction].manual > 0 ? (
+            <span className="tabular-nums" title="이번만으로 고른 거래는 바꾸지 않음">
+              이번만 {current.data[direction].manual}건 제외
+            </span>
           ) : null}
-        </div>
+          {current.data[direction].samples.map((sample) => (
+            <span key={sample} className="rounded border border-line bg-canvas px-1 break-all">
+              {sample}
+            </span>
+          ))}
+        </p>
       )}
     </div>
   );

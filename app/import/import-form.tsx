@@ -518,9 +518,10 @@ export function ImportForm() {
             }}
             className="text-[13px] file:mr-3 file:rounded-md file:border file:border-line-strong file:bg-canvas file:px-3 file:py-1.5 file:text-[13px] file:font-medium file:text-fg hover:file:bg-hover"
           />
-          <p className="text-xs text-muted">
-            여기로 끌어다 놓아도 됩니다. 여러 번 골라도 쌓입니다 — 폴더가 달라도 됩니다.
-            한 파일당 4MB 까지. 담기만 해서는 아무것도 서버로 보내지 않습니다.
+          <p className="flex flex-wrap gap-1.5 text-xs text-muted" data-testid="drop-hint">
+            <span className="rounded border border-line bg-subtle px-1">끌어다 놓기</span>
+            <span className="rounded border border-line bg-subtle px-1">.xlsx</span>
+            <span className="rounded border border-line bg-subtle px-1">최대 4MB</span>
           </p>
         </div>
 
@@ -609,9 +610,12 @@ export function ImportForm() {
 
         {needsPassword ? (
           <div className="flex w-full flex-col gap-1">
-            <label htmlFor="statement-password" className="text-[13px] text-soft">
-              파일 비밀번호
-            </label>
+            <div className="flex items-center gap-2">
+              <label htmlFor="statement-password" className="text-[13px] text-soft">
+                파일 비밀번호
+              </label>
+              <span className="rounded border border-line bg-subtle px-1 text-xs text-muted">서버에 저장 안 함</span>
+            </div>
             <input
               id="statement-password"
               type="password"
@@ -625,11 +629,6 @@ export function ImportForm() {
               disabled={locked}
               className="h-9 w-full max-w-xs rounded-md border border-control bg-canvas px-3 text-[13px]"
             />
-            <p className="text-xs text-muted">
-              암호가 걸린 파일이 있습니다. 세 파일 모두 같은 비밀번호로 풉니다.{" "}
-              <strong className="font-medium">비밀번호는 서버에 저장하지 않습니다.</strong>{" "}
-              요청마다 한 번 쓰고 바로 버리며, 암호 걸린 파일이 남지 않으면 이 입력칸도 비웁니다.
-            </p>
           </div>
         ) : null}
       </section>
@@ -637,10 +636,6 @@ export function ImportForm() {
       {/* ② 미리보기 */}
       <section className="flex flex-col gap-2">
         <h2 className="text-[13px] font-semibold text-fg">② 미리보기</h2>
-        <p className="text-xs text-muted">
-          파일마다 비밀번호 · 계좌 · 건수를 확인합니다. 이 단계에서는 아무것도 저장하지 않습니다.
-          오류가 난 파일은 고친 뒤 다시 누르면 그 파일만 다시 확인합니다.
-        </p>
         <div>
           <button
             type="button"
@@ -663,10 +658,6 @@ export function ImportForm() {
       {/* ③ 적용 */}
       <section className="flex flex-col gap-2">
         <h2 className="text-[13px] font-semibold text-fg">③ 월별 현금흐름에 적용</h2>
-        <p className="text-xs text-muted">
-          체크한 파일만 저장합니다. 서버가 파일을 처음부터 다시 검사한 뒤 저장하고, 이미 있는
-          거래는 중복으로 건너뜁니다.
-        </p>
         <div>
           <button
             type="button"
@@ -705,17 +696,10 @@ export function ImportForm() {
                       저장 {result.outcome.data.inserted}건 · 중복 {result.outcome.data.skipped}건
                     </p>
                     {result.outcome.data.unclassified > 0 ? (
-                      <p className="text-warn">
-                        이 파일에 미분류 거래가 {result.outcome.data.unclassified}건 있습니다.{" "}
-                        {monthsOf(result.outcome.data.period).map((month) => (
-                          <Link
-                            key={month}
-                            href={`/classify?month=${month}`}
-                            className="mr-2 underline underline-offset-4"
-                          >
-                            {month} 분류 정리
-                          </Link>
-                        ))}
+                      <p>
+                        <span className="rounded border border-warn-line bg-warn-bg px-1 text-xs text-warn">
+                          미분류 {result.outcome.data.unclassified}건
+                        </span>
                       </p>
                     ) : null}
                     <Warnings codes={result.outcome.data.warnings} />
@@ -726,7 +710,7 @@ export function ImportForm() {
                           href={`/report?month=${month}`}
                           className="text-accent-text underline-offset-4 hover:underline"
                         >
-                          {month} 리포트 보기
+                          {month} 현금흐름표
                         </Link>
                       ))}
                     </p>
