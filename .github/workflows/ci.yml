@@ -334,8 +334,12 @@ jobs:
           # push 한 커밋은 정상 변경일 수 있으므로 세지 않는다 — 작성자로 고르면 @claude 커밋(claude[bot])을 오탐한다.
           refine=$(gh api "repos/$GITHUB_REPOSITORY/compare/$SHA...$HEAD_REF" \
             --jq '.commits[] | select(.commit.message | test("\\[claude-refine\\]")) | .sha')
-          bad=$(for c in $refine; do gh api "repos/$GITHUB_REPOSITORY/commits/$c" --jq '.files[].filename'; done \
-            | sort -u | grep -E '^(migrations|\.github)/' || true)
+          # API 호출이 실패하면 여기서 멈춘다(fail-closed). 파이프 안에서 실패하면 || true 에 묻힌다.
+          files=""
+          for c in $refine; do
+            files+=$(gh api "repos/$GITHUB_REPOSITORY/commits/$c" --jq '.files[].filename')$'\n'
+          done
+          bad=$(printf '%s' "$files" | sort -u | grep -E '^(migrations|\.github)/' || true)
           if [ -n "$bad" ]; then
             mkdir -p .refine
             printf '%s\n' "$bad" > .refine/violations.txt
