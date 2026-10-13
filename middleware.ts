@@ -33,12 +33,13 @@ export default auth((req) => {
 export const config = {
   // 아래 경로만 빼고 전부 보호한다.
   //   api/auth  - 로그인 · 콜백 핸들러
+  //   api/health - 배포 후 헬스체크(deploy.yml). 커밋과 DB 연결 여부만 돌려준다(lib/health.mjs)
   //   signin    - 로그인 페이지
   //   _next/*   - 빌드 산출물
   //   favicon.ico
   // 접두사 매칭이 아니라 정확히 그 경로(또는 그 하위)만 예외로 둔다.
   // `api/auth` 를 접두사로 두면 `/api/authorize` 같은 경로까지 열린다.
   matcher: [
-    "/((?!api/auth$|api/auth/|signin$|_next/static/|_next/image/|favicon\\.ico$).*)",
+    "/((?!api/auth$|api/auth/|api/health$|signin$|_next/static/|_next/image/|favicon\\.ico$).*)",
   ],
 };

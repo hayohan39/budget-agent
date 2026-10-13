@@ -1,0 +1,37 @@
+name: Preview cleanup
+
+# PR 이 닫히면(merge 포함) 그 PR 의 Neon 프리뷰 브랜치를 지운다.
+# Neon Free 는 프로젝트당 브랜치 수 한도가 있어서 치워 두지 않으면 쌓인다.
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    if: ${{ !github.event.repository.is_template }}
+    runs-on: ubuntu-latest
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # PR 브랜치가 이미 지워졌을 수 있으니 base 의 스크립트를 쓴다.
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+
+      - name: Delete Neon preview branches
+        env:
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if [ -z "$NEON_API_KEY" ] || [ -z "$NEON_PROJECT_ID" ]; then
+            echo "Neon 설정이 없어 건너뜁니다."
+            exit 0
+          fi
+          node scripts/neon.mjs preview-delete --pr "$PR"

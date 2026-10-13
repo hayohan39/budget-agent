@@ -1,7 +1,7 @@
 name: Claude Mention
 
 # PR/이슈 코멘트에 @claude 를 붙이면 Claude 가 그 지시대로 작업한다.
-# 프로세스상 "merge 대신 코멘트를 남겼을 때" 를 처리하는 워크플로.
+# PR 리뷰 중 "merge 대신 수정 요청" 을 할 때 쓴다.
 on:
   issue_comment:
     types: [created]
@@ -41,17 +41,25 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          token: ${{ secrets.DEVFLOW_PAT || github.token }}
+          token: ${{ secrets.BOT_PAT || github.token }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
 
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ secrets.DEVFLOW_PAT || '' }}
+          github_token: ${{ secrets.BOT_PAT || '' }}
           trigger_phrase: "@claude"
           additional_permissions: |
             actions: read
           claude_args: |
-            --model claude-sonnet-5
-            --max-turns 40
+            --model ${{ vars.CLAUDE_MODEL || 'claude-sonnet-5' }}
+            --max-turns 60
             --allowed-tools "Bash,Read,Edit,Write,Glob,Grep,mcp__github_ci__get_ci_status,mcp__github_ci__get_workflow_run_details,mcp__github_ci__download_job_log"

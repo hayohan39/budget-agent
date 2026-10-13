@@ -176,7 +176,7 @@ Environment Variables" 를 **꺼 두면** 그 변수가 사라질 수 있고, �
 | --- | --- |
 | `ACCOUNT_LAST4_MAIN` / `_FIXED` / `_EMERGENCY` | 계좌 등록 스크립트 전용(`scripts/seed-accounts.mjs:149`). 웹앱은 읽지 않는다. |
 | `TEST_DATABASE_URL` | 로컬 테스트 전용. 로컬 호스트가 아니면 테스트가 거부한다(`test/db-transactions.test.mjs:236`). |
-| `USE_NEON` / `USE_VERCEL` | GitHub **리포지토리 variable**. 워크플로가 DB·배포 단계를 돌릴지 판단하는 데만 쓴다(`.github/workflows/deploy.yml:29`). **런타임 DB 접근을 막는 플래그가 아니다** — 웹앱 코드 어디에도 `USE_NEON` 은 없다. |
+| `USE_NEON` | GitHub **리포지토리 variable**. 수동 워크플로(`migrate.yml` · `seed-accounts.yml`)가 DB 단계를 돌릴지 판단하는 데만 쓴다. `deploy.yml` 은 더 이상 보지 않는다(`DATABASE_URL` 시크릿이 있으면 마이그레이션). **런타임 DB 접근을 막는 플래그가 아니다.** `USE_VERCEL` 은 이제 쓰지 않는다. |
 
 ### 3-5. Vercel 환경변수 ≠ GitHub 시크릿
 
@@ -184,9 +184,10 @@ Environment Variables" 를 **꺼 두면** 그 변수가 사라질 수 있고, �
 
 - **Vercel 환경변수**: 배포된 앱이 실행 중에 읽는 값. 위 3-1 표가 여기 들어간다.
 - **GitHub 시크릿**: 워크플로가 쓰는 값. `deploy.yml` 은 마이그레이션 실행에
-  `DATABASE_URL` 을(`.github/workflows/deploy.yml:38`), Vercel CLI 인증에
-  `VERCEL_TOKEN` · `VERCEL_ORG_ID` · `VERCEL_PROJECT_ID` 를
-  쓴다(`.github/workflows/deploy.yml:89-91`).
+  `DATABASE_URL` 을, Vercel CLI 인증에 `VERCEL_TOKEN` · `VERCEL_ORG_ID` · `VERCEL_PROJECT_ID` 를
+  쓴다(ID 둘은 리포 variable 이 있으면 그걸, 없으면 시크릿을 읽는다).
+  PR 프리뷰(`ci.yml` preview job)는 여기에 더해 시크릿 `NEON_API_KEY` 와 variable `NEON_PROJECT_ID` 로
+  프로덕션 DB 를 복제한 Neon 브랜치를 만든다. 둘 중 하나라도 없으면 프리뷰만 건너뛴다.
 
 `DATABASE_URL` 은 **양쪽 모두에** 필요하다. 앱이 읽어야 하고(Vercel), 배포 때
 마이그레이션도 돌려야 한다(GitHub). 한쪽만 넣고 다른 쪽을 빠뜨리는 게 흔한
@@ -195,14 +196,13 @@ Environment Variables" 를 **꺼 두면** 그 변수가 사라질 수 있고, �
 ### 3-6. 환경변수를 바꾸면 **다시 배포해야 한다**
 
 값을 저장하는 것만으로는 이미 돌고 있는 배포에 반영되지 않는다. 배포
-파이프라인이 빌드 직전에 Vercel 의 프로덕션 환경변수를 끌어와서 빌드하기
-때문이다(`.github/workflows/deploy.yml` 의 `vercel pull --environment=production`
-→ `vercel build --prod`).
+(`.github/workflows/deploy.yml` 의 `vercel deploy --prod`, Vercel 원격 빌드)가
+그 시점의 프로덕션 환경변수로 빌드하기 때문이다.
 
 반영하려면 둘 중 하나:
 
 - GitHub Actions 에서 `Deploy` 워크플로를 수동 실행한다
-  (`workflow_dispatch` 가 열려 있다, `.github/workflows/deploy.yml:13`), 또는
+  (`workflow_dispatch` 가 열려 있다), 또는
 - Vercel 대시보드의 Deployments 에서 최신 배포를 **Redeploy** 한다.
 
 ---

@@ -29,3 +29,6 @@ npm-debug.log*
 # 예외: 개인정보를 제거한 파서 테스트 fixture 한 개만 허용한다.
 # 위 규칙은 그대로 두고 이 경로만 좁게 되살린다. (test/fixtures/README.md 참고)
 !test/fixtures/toss-sample-masked.xlsx
+
+# CI 품질 리뷰(refine)의 작업 파일
+.refine/
