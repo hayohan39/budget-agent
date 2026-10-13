@@ -3,8 +3,6 @@
   "framework": "nextjs",
   "regions": ["sin1"],
   "git": {
-    "deploymentEnabled": {
-      "main": false
-    }
+    "deploymentEnabled": false
   }
 }

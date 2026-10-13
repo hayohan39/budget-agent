@@ -1,7 +1,8 @@
 name: Claude PR Review
 
-# PR 이 열리면 자동으로 리뷰를 남긴다. 사용자가 PR 을 읽고 merge 를 결정하기 전에
-# 기계적으로 잡을 수 있는 것들을 먼저 걸러내는 단계.
+# PR 이 열리면 자동 리뷰를 남긴다. 사람이 PR 을 읽고 merge 를 결정하기 전에
+# 기계적으로 잡을 수 있는 것을 먼저 걸러내는 단계다.
+# 끄려면: gh variable set CLAUDE_REVIEW --body false
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review]
@@ -12,7 +13,10 @@ concurrency:
 
 jobs:
   review:
-    if: github.event.pull_request.draft == false
+    if: >-
+      github.event.pull_request.draft == false
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CLAUDE_REVIEW != 'false'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -32,22 +36,28 @@ jobs:
           track_progress: true
           use_sticky_comment: true
           claude_args: |
-            --model claude-sonnet-5
+            --model ${{ vars.CLAUDE_MODEL || 'claude-sonnet-5' }}
             --max-turns 60
             --allowed-tools "Read,Glob,Grep,LS,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git merge-base:*),Bash(git rev-parse:*),Bash(git ls-files:*),Bash(git blame:*)"
           prompt: |
-            이 PR 의 diff 를 리뷰해라. 한국어로 쓴다.
+            이 PR 의 diff 를 리뷰해라. 한국어로 쓴다. 리뷰를 읽는 사람은 이 PR 을
+            merge 할지 결정하는 리포지토리 주인이고, 휴대폰으로 읽을 수도 있다.
 
-            우선순위대로 본다:
+            맨 위에 3줄 이내 요약: 이 PR 이 무엇을 바꾸는지, merge 하면 사용자에게
+            무엇이 달라지는지.
+
+            그 다음 우선순위대로:
             1. 정확성 버그 — 실제로 깨지는 입력/상태를 특정할 수 있는 것만.
-            2. 크로스 플랫폼 문제 — 하드코딩된 `/` 경로, `path.join` 미사용,
-               쉘 의존(`rm -rf`, `cp`, `FOO=bar cmd` 같은 POSIX 전용 문법),
-               CRLF/LF, 파일명 대소문자 가정.
-            3. 보안 — 커밋된 비밀값, 검증 없는 입력, 권한 누락.
-            4. 지나친 복잡도나 기존 코드와 중복되는 구현.
+            2. 마이그레이션 — `migrations/` 변경이 있으면 반드시 본다. 기존 데이터가 있는
+               프로덕션에서 안전한가(NOT NULL 추가, 컬럼/테이블 삭제, 타입 변경, 긴 락),
+               이미 적용된 파일을 수정하지 않았는가, 되돌릴 방법이 있는가.
+            3. 보안 — 커밋된 비밀값, SQL 문자열 조합(파라미터 바인딩 미사용), 검증 없는 입력,
+               인증 없이 열린 쓰기 API.
+            (코드 품질 — 덧붙임·중복·단순화·일관성 — 은 CI 뒤 품질 리뷰(`refine` job)가 따로 본다.
+             여기서는 다루지 않는다.)
 
             규칙:
             - 스타일 취향이나 lint 가 이미 잡는 것은 언급하지 않는다.
-            - 지적할 때는 파일:라인 과 "이런 입력이면 이렇게 깨진다" 를 같이 쓴다.
+            - 지적할 때는 `파일:라인` 과 "이런 입력이면 이렇게 깨진다" 를 같이 쓴다.
             - 문제가 없으면 짧게 "문제 없음" 이라고만 하고 억지로 만들어내지 않는다.
-            - 마지막 줄에 `승인 권장` / `수정 필요` 중 하나를 적는다.
+            - 마지막 줄에 `✅ merge 해도 됨` / `✋ 수정 필요` 중 하나를 적는다.

@@ -1,12 +1,13 @@
 name: Deploy
 
-# main 에 merge 되면 DB 마이그레이션 -> Vercel 프로덕션 배포 순서로 진행하고,
-# 방금 merge 된 PR 에 결과를 코멘트로 남긴다.
+# main 에 merge 되면: 프로덕션 DB 마이그레이션 → Vercel 프로덕션 배포 → 헬스체크
+# → 방금 merge 된 PR 에 결과 코멘트.
 #
-# USE_NEON / USE_VERCEL 은 리포지토리 variable(secret 아님)이며 devflow 가
-# 프로젝트 생성 시 세팅한다. 켜져 있어도 연결에 필요한 값이 아직 없으면
-# 실패시키지 않고 무엇이 없는지 알린 뒤 건너뛴다. 아직 연결하지 않은 프로젝트에서
-# merge 했다는 이유만으로 main 이 빨간불이 되는 것은 잘못된 동작이다.
+# Vercel 의 Git 자동배포는 쓰지 않는다(프로젝트를 Git 에 연결하지 않음). 배포가
+# 반드시 마이그레이션 뒤에 일어나도록 순서를 이 워크플로가 쥐고 있기 위해서다.
+#
+# 필요한 값이 아직 없으면(프로비저닝 전) 실패시키지 않고 무엇이 없는지 알린 뒤
+# 건너뛴다. 연결 전에 merge 했다는 이유로 main 이 빨간불이 되는 것은 잘못이다.
 on:
   push:
     branches: [main]
@@ -26,7 +27,8 @@ permissions:
 jobs:
   migrate:
     name: Database migrate
-    if: vars.USE_NEON == 'true'
+    # 템플릿 리포지토리 자신은 배포하지 않는다.
+    if: ${{ !github.event.repository.is_template }}
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -42,22 +44,16 @@ jobs:
             {
               echo "### ⏭️ 마이그레이션 건너뜀"
               echo ""
-              echo "\`DATABASE_URL\` 시크릿이 없습니다."
-              echo ""
-              echo "설정: \`devflow provision --repo <owner>/<name> --neon\`"
-              echo "또는 Neon 콘솔의 연결 문자열을 \`gh secret set DATABASE_URL\` 로 넣으세요."
-              echo ""
-              echo "DB 를 쓰지 않을 거면 \`gh variable set USE_NEON --body false\`."
+              echo "\`DATABASE_URL\` 시크릿이 없습니다. 프로비저닝이 끝나지 않은 프로젝트입니다."
+              echo "project-bootstrap 의 new-project 워크플로를 같은 이름으로 다시 실행하면 채워집니다."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-
           if ! ls migrations/*.sql >/dev/null 2>&1; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
             echo "마이그레이션 파일이 없습니다. 건너뜁니다."
             exit 0
           fi
-
           echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v5
@@ -79,86 +75,109 @@ jobs:
   deploy:
     name: Vercel production deploy
     needs: [migrate]
-    if: always() && vars.USE_VERCEL == 'true' && needs.migrate.result != 'failure' && needs.migrate.result != 'cancelled'
+    # 마이그레이션이 실패하면 배포하지 않는다. (건너뛴 것은 괜찮다.)
+    if: >-
+      always()
+      && !github.event.repository.is_template
+      && needs.migrate.result != 'failure'
+      && needs.migrate.result != 'cancelled'
     runs-on: ubuntu-latest
-    environment: production
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
     permissions:
       contents: read
       pull-requests: write
     env:
-      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID || secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID || secrets.VERCEL_PROJECT_ID }}
     steps:
-      - uses: actions/checkout@v5
-
       - name: Check Vercel configuration
         id: guard
         run: |
           missing=()
-          [ -n "$VERCEL_TOKEN" ]      || missing+=(VERCEL_TOKEN)
-          [ -n "$VERCEL_ORG_ID" ]     || missing+=(VERCEL_ORG_ID)
-          [ -n "$VERCEL_PROJECT_ID" ] || missing+=(VERCEL_PROJECT_ID)
-
+          for key in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            [ -n "${!key}" ] || missing+=("$key")
+          done
           if [ ${#missing[@]} -gt 0 ]; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
             {
               echo "### ⏭️ Vercel 배포 건너뜀"
               echo ""
-              echo "다음 시크릿이 없습니다: \`${missing[*]}\`"
-              echo ""
-              echo "설정: \`devflow provision --repo <owner>/<name> --vercel\`"
-              echo ""
-              echo "Vercel 을 쓰지 않을 거면 \`gh variable set USE_VERCEL --body false\`."
+              echo "없는 값: \`${missing[*]}\`"
+              echo "project-bootstrap 의 new-project 워크플로를 같은 이름으로 다시 실행하면 채워집니다."
             } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
 
-          echo "ready=true" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v5
+        if: steps.guard.outputs.ready == 'true'
 
       - uses: actions/setup-node@v5
         if: steps.guard.outputs.ready == 'true'
         with:
           node-version-file: .nvmrc
-          cache: npm
-
-      - name: Install Vercel CLI
-        if: steps.guard.outputs.ready == 'true'
-        run: npm install --global vercel@latest
-
-      - name: Pull production env
-        if: steps.guard.outputs.ready == 'true'
-        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
-
-      - name: Build
-        if: steps.guard.outputs.ready == 'true'
-        run: vercel build --prod --token="$VERCEL_TOKEN"
 
       - name: Deploy
         id: deploy
         if: steps.guard.outputs.ready == 'true'
         run: |
-          # --yes: 배포 이력이 없는 새 프로젝트의 첫 배포에서 CLI 가 프레임워크
-          # 자동 감지 확인을 물으려다 비대화형 CI 에서 실패하는 것을 막는다.
-          url=$(vercel deploy --prebuilt --prod --yes --token="$VERCEL_TOKEN")
+          npm install --global vercel@latest >/dev/null
+          # 원격 빌드. --yes: 배포 이력이 없는 새 프로젝트의 첫 배포에서 CLI 가
+          # 대화형 확인을 물으려다 CI 에서 실패하는 것을 막는다.
+          url=$(vercel deploy --prod --yes --token="$VERCEL_TOKEN" \
+            --meta githubCommitSha="$GITHUB_SHA")
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "배포됨: $url"
-          {
-            echo "### ✅ 프로덕션 배포 완료"
-            echo ""
-            echo "$url"
-          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Comment on the merged PR
-        if: steps.guard.outputs.ready == 'true' && steps.deploy.outcome == 'success'
+      # 프로덕션 도메인(<project>.vercel.app 등)으로 /api/health 를 찍어 본다.
+      # 개별 배포 URL 은 Vercel 배포 보호로 401 이 날 수 있어서 도메인을 쓴다.
+      - name: Health check
+        id: health
+        if: steps.deploy.outcome == 'success'
+        run: |
+          domain=$(curl -fsS -H "Authorization: Bearer $VERCEL_TOKEN" \
+            "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID/domains?production=true" \
+            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const d=JSON.parse(s).domains??[];process.stdout.write(d[0]?.name??"")})' || true)
+          if [ -z "$domain" ]; then
+            echo "status=unknown" >> "$GITHUB_OUTPUT"
+            echo "::warning::프로덕션 도메인을 찾지 못해 헬스체크를 건너뜁니다."
+            exit 0
+          fi
+          echo "domain=https://$domain" >> "$GITHUB_OUTPUT"
+          for _ in 1 2 3 4 5 6; do
+            code=$(curl -s -o health.json -w '%{http_code}' "https://$domain/api/health" || true)
+            [ "$code" = "200" ] && break
+            sleep 10
+          done
+          echo "status=$code" >> "$GITHUB_OUTPUT"
+          cat health.json 2>/dev/null || true
+          if [ "$code" != "200" ]; then
+            echo "::error::헬스체크 실패 (HTTP $code). 배포는 됐지만 앱이나 DB 연결에 문제가 있습니다."
+            exit 1
+          fi
+
+      - name: Summary and PR comment
+        if: always() && steps.guard.outputs.ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           URL: ${{ steps.deploy.outputs.url }}
-          SHA: ${{ github.sha }}
+          DOMAIN: ${{ steps.health.outputs.domain }}
+          HEALTH: ${{ steps.health.outputs.status }}
+          DEPLOY: ${{ steps.deploy.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          pr=$(gh pr list --state merged --search "$SHA" --limit 1 --json number --jq '.[0].number // empty')
-          if [ -n "$pr" ]; then
-            gh pr comment "$pr" --body "🚀 main 배포 완료: $URL"
+          if [ "$DEPLOY" = "success" ] && [ "$HEALTH" = "200" ]; then
+            msg="🚀 프로덕션 배포 완료: ${DOMAIN:-$URL} (헬스체크 OK)"
+          elif [ "$DEPLOY" = "success" ]; then
+            msg="⚠️ 배포는 됐지만 헬스체크가 ${HEALTH:-미실행} 입니다: ${DOMAIN:-$URL} — [로그]($RUN_URL)"
           else
-            echo "이 커밋에 연결된 merged PR 을 찾지 못했습니다. 코멘트를 건너뜁니다."
+            msg="❌ 프로덕션 배포 실패 — [로그]($RUN_URL)"
+          fi
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          pr=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '[.[] | select(.merged_at != null)][0].number // empty' || true)
+          if [ -n "$pr" ]; then
+            gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body "$msg"
           fi
