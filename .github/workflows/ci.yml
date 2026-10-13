@@ -325,13 +325,21 @@ jobs:
         id: protected
         if: always() && steps.guard.outputs.proceed == 'true'
         env:
+          GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          git fetch -q origin "$HEAD_REF"
+          # claude-code-action 은 끝나면서 자기 토큰을 폐기해 git 원격 인증이 죽어 있다 — git fetch 대신 API 로 본다.
           # [claude-refine] 커밋이 바꾼 파일만 본다(태그는 pre-push 훅이 강제한다). 그 사이 사람·@claude·autofix 가
           # push 한 커밋은 정상 변경일 수 있으므로 세지 않는다 — 작성자로 고르면 @claude 커밋(claude[bot])을 오탐한다.
-          bad=$(git log --format= --name-only --grep="\[claude-refine\]" "$SHA..origin/$HEAD_REF" | sort -u | grep -E '^(migrations|\.github)/' || true)
+          refine=$(gh api "repos/$GITHUB_REPOSITORY/compare/$SHA...$HEAD_REF" \
+            --jq '.commits[] | select(.commit.message | test("\\[claude-refine\\]")) | .sha')
+          # API 호출이 실패하면 여기서 멈춘다(fail-closed). 파이프 안에서 실패하면 || true 에 묻힌다.
+          files=""
+          for c in $refine; do
+            files+=$(gh api "repos/$GITHUB_REPOSITORY/commits/$c" --jq '.files[].filename')$'\n'
+          done
+          bad=$(printf '%s' "$files" | sort -u | grep -E '^(migrations|\.github)/' || true)
           if [ -n "$bad" ]; then
             mkdir -p .refine
             printf '%s\n' "$bad" > .refine/violations.txt
