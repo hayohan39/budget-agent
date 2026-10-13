@@ -188,6 +188,10 @@ Environment Variables" 를 **꺼 두면** 그 변수가 사라질 수 있고, �
   쓴다(ID 둘은 리포 variable 이 있으면 그걸, 없으면 시크릿을 읽는다).
   PR 프리뷰(`ci.yml` preview job)는 여기에 더해 시크릿 `NEON_API_KEY` 와 `NEON_PROJECT_ID`(variable 또는 시크릿)로
   프로덕션 DB 를 복제한 Neon 브랜치를 만든다. 둘 중 하나라도 없으면 프리뷰만 건너뛴다.
+  `NEON_API_KEY` 는 이 리포 전용으로 발급한 Neon **Personal** API 키다(Neon 콘솔 → Account settings →
+  API keys). 다른 리포와 공유하지 않으므로 이 리포에서 유출되면 이 키만 폐기·재발급하면 된다.
+  `NEON_PROJECT_ID` 는 Neon 콘솔 → 프로젝트 → Settings → General 의 Project ID(`단어-단어-숫자`)다 —
+  `DATABASE_URL` 안의 `ep-...` 는 엔드포인트 ID 라 다른 값이다.
 
 `DATABASE_URL` 은 **양쪽 모두에** 필요하다. 앱이 읽어야 하고(Vercel), 배포 때
 마이그레이션도 돌려야 한다(GitHub). 한쪽만 넣고 다른 쪽을 빠뜨리는 게 흔한
