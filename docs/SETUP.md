@@ -186,7 +186,7 @@ Environment Variables" 를 **꺼 두면** 그 변수가 사라질 수 있고, �
 - **GitHub 시크릿**: 워크플로가 쓰는 값. `deploy.yml` 은 마이그레이션 실행에
   `DATABASE_URL` 을, Vercel CLI 인증에 `VERCEL_TOKEN` · `VERCEL_ORG_ID` · `VERCEL_PROJECT_ID` 를
   쓴다(ID 둘은 리포 variable 이 있으면 그걸, 없으면 시크릿을 읽는다).
-  PR 프리뷰(`ci.yml` preview job)는 여기에 더해 시크릿 `NEON_API_KEY` 와 variable `NEON_PROJECT_ID` 로
+  PR 프리뷰(`ci.yml` preview job)는 여기에 더해 시크릿 `NEON_API_KEY` 와 `NEON_PROJECT_ID`(variable 또는 시크릿)로
   프로덕션 DB 를 복제한 Neon 브랜치를 만든다. 둘 중 하나라도 없으면 프리뷰만 건너뛴다.
 
 `DATABASE_URL` 은 **양쪽 모두에** 필요하다. 앱이 읽어야 하고(Vercel), 배포 때
