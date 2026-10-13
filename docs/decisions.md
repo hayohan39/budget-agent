@@ -30,7 +30,7 @@
     Windows 호환은 CLAUDE.md 의 크로스 플랫폼 규칙으로 지킨다.
   - `/api/health` 를 로그인 예외로 연다. 커밋 7자리와 DB 연결 여부(ok/error)만 돌려준다.
   - `@claude` 는 리포 주인의 코멘트만 처리(이 리포에서 먼저 넣은 제한, 유지).
-- 영향: 리포 시크릿 `NEON_API_KEY`, 변수 `NEON_PROJECT_ID` 가 있어야 프리뷰가 돈다(없으면 건너뜀).
+- 영향: 리포 시크릿 `NEON_API_KEY` 와 `NEON_PROJECT_ID`(변수 또는 시크릿)가 있어야 프리뷰가 돈다(없으면 건너뜀).
   되돌리려면 이 도입 PR 을 revert.
 
 ## 2026-09-17 기본 스택
