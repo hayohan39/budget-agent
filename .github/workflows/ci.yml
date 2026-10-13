@@ -35,6 +35,9 @@ jobs:
         image: postgres:17
         env:
           POSTGRES_PASSWORD: postgres
+          # 정렬(collation)을 Neon 기본값·로컬과 같은 C.UTF-8 로. 이미지 기본값(en_US.utf8)은
+          # 한글·괄호 정렬 순서가 달라 ORDER BY 결과를 검사하는 DB 테스트가 CI 에서만 깨진다.
+          POSTGRES_INITDB_ARGS: --locale-provider=libc --locale=C.UTF-8
         ports: ["5432:5432"]
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
