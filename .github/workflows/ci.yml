@@ -294,6 +294,9 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.BOT_PAT || '' }}
+          # Claude 가 App 토큰으로 push 한 커밋의 실행은 claude[bot] 이 시작한다. action 은 bot 이 시작한 실행을 기본으로
+          # 거부하므로 허용한다. 반복은 refine 의 Round guard·autofix 의 시도 횟수가 막는다.
+          allowed_bots: claude
           claude_args: |
             --model ${{ vars.CLAUDE_MODEL || 'claude-sonnet-5' }}
             --max-turns 40
@@ -443,6 +446,9 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.BOT_PAT || '' }}
+          # Claude 가 App 토큰으로 push 한 커밋의 실행은 claude[bot] 이 시작한다. action 은 bot 이 시작한 실행을 기본으로
+          # 거부하므로 허용한다. 반복은 refine 의 Round guard·autofix 의 시도 횟수가 막는다.
+          allowed_bots: claude
           additional_permissions: |
             actions: read
           use_sticky_comment: true
