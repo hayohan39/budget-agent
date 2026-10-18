@@ -33,6 +33,9 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # 이 리포는 push 마다 리뷰한다(synchronize). Claude 가 push 한 커밋의 실행은 claude[bot] 이 시작하므로 허용한다.
+          # 이 job 은 읽기 전용이라 리뷰가 다시 커밋을 만들지 않는다.
+          allowed_bots: claude
           track_progress: true
           use_sticky_comment: true
           claude_args: |
