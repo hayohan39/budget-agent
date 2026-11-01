@@ -19,6 +19,16 @@
 
 ---
 
+## 2026-11-01 리포지토리 공개 허용
+
+- 결정: 리포가 public 이어도 된다. PLAN.md 보안 체계 6항의 "private 유지" 를 바꾼다.
+- 이유: 리포에는 코드와 마스킹 fixture 만 있고 거래 데이터는 Neon 에만 있다. 보호는
+  앱 인증(이메일 화이트리스트)과 데이터·로그 위생 규칙이 맡는다.
+- 검토한 대안: private 유지 — 지킬 데이터가 리포에 없어서 얻는 보호가 적다.
+- 영향: Actions 로그 · PR · 코멘트가 공개된다. fork PR 이 시크릿 job 을 돌리지 않게 하는
+  기존 조건(`head.repo.full_name == github.repository`)과 `@claude` 리포 주인 제한을 유지한다.
+  되돌리려면 GitHub 설정에서 private 로 바꾸고 이 항목을 갱신한다.
+
 ## 2026-10-13 project-bootstrap 개발 흐름 도입
 
 - 결정: devflow 스캐폴드 → project-bootstrap 템플릿의 CI·배포 흐름으로 맞춘다
