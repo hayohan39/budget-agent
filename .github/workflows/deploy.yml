@@ -1,7 +1,11 @@
 name: Deploy
+# 배포한 커밋을 실행 이름에 남긴다. workflow_run 으로 시작한 실행의 head_sha 는 배포한 커밋이 아니라 그 순간의 main 이라서,
+# "마지막으로 성공한 배포" 는 이 이름에서 읽는다(아래 Changed since the last successful deploy).
+run-name: Deploy ${{ github.event.workflow_run.head_sha || github.sha }}
 
-# main 에 merge 되면: 프로덕션 DB 마이그레이션 → Vercel 프로덕션 배포 → 헬스체크
-# → 방금 merge 된 PR 에 결과 코멘트.
+# main 에 merge 되면: CI 의 test 가 merge 결과물을 다시 검사 → 통과하면 프로덕션 DB 마이그레이션 → Vercel 프로덕션 배포
+# → 헬스체크 → 방금 merge 된 PR 에 결과 코멘트. test 가 실패하거나 취소되면 배포하지 않는다.
+# 문서만 바뀐 merge(scripts/ci-changes.mjs)는 배포하지 않는다 — 비교 기준은 마지막으로 성공한 배포다.
 #
 # Vercel 의 Git 자동배포는 쓰지 않는다(프로젝트를 Git 에 연결하지 않음). 배포가
 # 반드시 마이그레이션 뒤에 일어나도록 순서를 이 워크플로가 쥐고 있기 위해서다.
@@ -9,7 +13,9 @@ name: Deploy
 # 필요한 값이 아직 없으면(프로비저닝 전) 실패시키지 않고 무엇이 없는지 알린 뒤
 # 건너뛴다. 연결 전에 merge 했다는 이유로 main 이 빨간불이 되는 것은 잘못이다.
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -24,21 +30,57 @@ defaults:
 permissions:
   contents: read
 
+env:
+  # 배포할 커밋: CI 가 검사한 main 커밋(workflow_run) 또는 수동 실행한 커밋.
+  DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
 jobs:
   migrate:
     name: Database migrate
-    # 템플릿 리포지토리 자신은 배포하지 않는다.
-    if: ${{ !github.event.repository.is_template }}
+    # 템플릿 리포지토리 자신은 배포하지 않는다. CI(main push)가 성공했을 때만.
+    if: >-
+      !github.event.repository.is_template
+      && (github.event_name == 'workflow_dispatch'
+          || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success'))
     runs-on: ubuntu-latest
+    # 마이그레이션 도중 끊기면 더 아프다 — 넉넉히 둔다.
+    timeout-minutes: 30
     environment: production
+    permissions:
+      contents: read
+      actions: read # 마지막으로 성공한 배포 찾기
+    outputs:
+      code: ${{ steps.changes.outputs.code || 'true' }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+          fetch-depth: 0
+
+      # 수동 실행(workflow_dispatch)은 항상 배포한다. 성공한 배포가 없으면(첫 배포) base 가 비어 code=true.
+      # 배포한 커밋은 실행 이름(run-name)에서 읽는다. 이름에 커밋이 없는 옛 실행(push 로 시작)은 head_sha 가 그 커밋이다.
+      - name: Changed since the last successful deploy
+        id: changes
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/deploy.yml/runs?branch=main&status=success&per_page=20" \
+            --jq '[.workflow_runs[] | ((.display_title | capture("(?<s>[0-9a-f]{40})") | .s)? // .head_sha)][0] // empty' || true)
+          echo "마지막 성공 배포: ${last:-(없음)}"
+          node scripts/ci-changes.mjs --base "$last" --head "$DEPLOY_SHA"
 
       - name: Check database configuration
         id: guard
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          CODE: ${{ steps.changes.outputs.code || 'true' }}
         run: |
+          if [ "$CODE" != true ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "### 📝 문서만 바뀜 — 배포를 건너뜁니다" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if [ -z "$DATABASE_URL" ]; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
             {
@@ -75,13 +117,14 @@ jobs:
   deploy:
     name: Vercel production deploy
     needs: [migrate]
-    # 마이그레이션이 실패하면 배포하지 않는다. (건너뛴 것은 괜찮다.)
+    # 마이그레이션이 실패하면 배포하지 않는다. 문서만 바뀐 merge·CI 실패(migrate job 이 건너뜀)도 배포하지 않는다.
     if: >-
       always()
       && !github.event.repository.is_template
-      && needs.migrate.result != 'failure'
-      && needs.migrate.result != 'cancelled'
+      && needs.migrate.result == 'success'
+      && needs.migrate.outputs.code != 'false'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment:
       name: production
       url: ${{ steps.deploy.outputs.url }}
@@ -114,6 +157,8 @@ jobs:
 
       - uses: actions/checkout@v5
         if: steps.guard.outputs.ready == 'true'
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
 
       - uses: actions/setup-node@v5
         if: steps.guard.outputs.ready == 'true'
@@ -128,7 +173,7 @@ jobs:
           # 원격 빌드. --yes: 배포 이력이 없는 새 프로젝트의 첫 배포에서 CLI 가
           # 대화형 확인을 물으려다 CI 에서 실패하는 것을 막는다.
           url=$(vercel deploy --prod --yes --token="$VERCEL_TOKEN" \
-            --meta githubCommitSha="$GITHUB_SHA")
+            --meta githubCommitSha="$DEPLOY_SHA")
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "배포됨: $url"
 
@@ -177,7 +222,35 @@ jobs:
             msg="❌ 프로덕션 배포 실패 — [로그]($RUN_URL)"
           fi
           echo "$msg" >> "$GITHUB_STEP_SUMMARY"
-          pr=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '[.[] | select(.merged_at != null)][0].number // empty' || true)
+          pr=$(gh api "repos/$GITHUB_REPOSITORY/commits/$DEPLOY_SHA/pulls" --jq '[.[] | select(.merged_at != null)][0].number // empty' || true)
           if [ -n "$pr" ]; then
             gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body "$msg"
           fi
+
+  # main 의 CI(test)가 실패하면 배포하지 않는다. 그 사실을 merge 된 PR 에 알린다(그러지 않으면 Actions 의 빨간 CI 로만 보인다).
+  # 취소(cancelled)는 뒤이은 merge 가 대신 검사·배포하므로 알리지 않는다. CI 가 실패할 때만 도는 1분짜리 job 이고,
+  # 실행은 실패로 끝난다("마지막 성공 배포" 로 집계되지 않게).
+  ci-failed:
+    name: Notify skipped deploy
+    if: >-
+      !github.event.repository.is_template
+      && github.event_name == 'workflow_run'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Comment on the merged PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          pr=$(gh api "repos/$GITHUB_REPOSITORY/commits/$DEPLOY_SHA/pulls" --jq '[.[] | select(.merged_at != null)][0].number // empty' || true)
+          msg="⏭️ main 검사(test)가 실패해 **배포하지 않았습니다** — 프로덕션은 이전 버전 그대로입니다. 고친 PR 을 merge 하면 그때 함께 배포됩니다. [CI 로그]($CI_URL)"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$pr" ]; then gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body "$msg"; fi
+          # 실패로 끝낸다 — 이 실행이 "성공한 배포" 로 집계되면 다음 배포가 이 커밋을 이미 배포된 것으로 본다.
+          exit 1

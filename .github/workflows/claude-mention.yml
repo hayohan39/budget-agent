@@ -12,10 +12,6 @@ on:
   issues:
     types: [opened, assigned, labeled]
 
-concurrency:
-  group: claude-mention-${{ github.event.issue.number || github.event.pull_request.number }}
-  cancel-in-progress: false
-
 jobs:
   claude:
     # 이 워크플로는 코멘트로 트리거되면서 레포 시크릿에 접근한다. 트리거 주체를
@@ -31,6 +27,13 @@ jobs:
         (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || github.event.label.name == 'claude'))
       )
     runs-on: ubuntu-latest
+    # 사람이 시킨 작업이라 auto-fix 보다 넉넉히 둔다.
+    timeout-minutes: 45
+    # job 단위로 둔다: workflow 단위면 @claude 가 없는 코멘트(봇 코멘트 포함)의 실행도 같은 그룹에 들어가
+    # 대기 중이던 @claude 실행을 밀어내고 취소시킨다. 건너뛴 job 은 그룹에 들어가지 않는다.
+    concurrency:
+      group: claude-mention-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: write
@@ -42,6 +45,17 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.BOT_PAT || github.token }}
+
+      # actions/checkout v6+ 는 토큰을 includeIf 로 포함한 별도 파일에 둔다. claude-code-action 은 로컬 설정의 extraheader 만
+      # 지워서, 그대로 두면 Claude 의 push 가 App 토큰이 아니라 GITHUB_TOKEN 으로 나가 그 커밋에 CI 가 돌지 않는다.
+      # 지금(v5)은 이미 로컬 설정에 있어 아무것도 바꾸지 않는다 — dependabot 이 checkout 을 올려도 깨지지 않게 미리 둔다.
+      # 토큰을 로컬 설정으로 옮겨 두면 action 이 PR 브랜치를 fetch 할 때는 쓰고, 그 뒤 지우고 자기 토큰(App 또는 BOT_PAT)으로 바꾼다.
+      - name: Hand checkout credentials to claude-code-action
+        run: |
+          key='http.https://github.com/.extraheader'
+          value=$(git config --get "$key" || true)
+          for k in $(git config --local --name-only --get-regexp '^includeif\.' || true); do git config --local --unset-all "$k"; done
+          if [ -n "$value" ]; then git config --local "$key" "$value"; fi
 
       - uses: actions/setup-node@v5
         with:
