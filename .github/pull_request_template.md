@@ -5,6 +5,7 @@
 ## 어떻게 확인했나
 
 - [ ] `npm run check` (lint · typecheck · test · build) 통과
+- [ ] 품질 점검(`.github/review/quality.md`): <!-- 고친 것 / 남긴 것 한 줄 -->
 - [ ] (DB 변경 시) 로컬 Postgres 에 `npm run migrate` 적용 확인
 - [ ] CLAUDE.md 의 "PR 보안 체크리스트" 확인
 - [ ] (UI 변경 시) 로컬에서 확인한 화면: <!-- 프리뷰는 로그인이 안 된다 -->

@@ -56,7 +56,7 @@
 | --- | --- |
 | 사용자 | Claude 세션에서 요청 · PR 리뷰 · **merge** (merge 는 항상 사용자가 한다) |
 | Claude (세션) | 브랜치 → 구현 → 로컬 검증 → 커밋 → push → **PR 생성** → CI 결과 확인 |
-| GitHub Actions | CI(자동) · CI 실패 시 auto-fix · 품질 리뷰 · PR 프리뷰(마이그레이션 검증) · merge 후 마이그레이션+배포 |
+| GitHub Actions | CI(자동) · CI 실패 시 auto-fix · Claude 리뷰 · PR 프리뷰(마이그레이션 검증) · merge 후 main 검사 → 마이그레이션+배포 |
 
 ## 개발 요청을 받으면
 
@@ -65,9 +65,9 @@
 2. 요청이 모호하거나 **인프라/비용/외부 서비스가 새로 필요한** 결정이면 구현 전에 먼저
    묻는다(아래 "인프라 결정" 참고). 그 외에는 합리적으로 판단해 진행하고 PR 에 적는다.
 3. 구현한다. 한 PR 에 한 목적. 무관한 리팩터링은 하지 않는다.
-4. **push 전에 diff 를 스스로 다듬는다**: `.github/review/quality.md` 기준(덧붙임·재사용·단순화·일관성·빈틈)으로
-   `git diff origin/main...HEAD` 를 한 번 훑는다. 세션에 `/simplify` 스킬이 있으면 그걸 써도 된다.
-   CI 뒤의 품질 리뷰는 안전망이다 — 거기서 지적이 적을수록 좋다.
+4. **push 전에 diff 를 스스로 다듬는다** — CI 에는 품질 리뷰가 없어서 이 단계가 유일한 품질 점검이다.
+   `.github/review/quality.md` 를 읽고 그 기준(덧붙임·재사용·단순화·일관성·빈틈)으로 `git diff origin/main...HEAD` 를 훑어
+   바로 고칠 것은 고치고, 남길 것은 PR 본문에 적는다. 세션에 `/simplify` 스킬이 있으면 먼저 돌리고 표로 한 번 더 본다.
    위 "PR 보안 체크리스트" 를 확인한다.
    그리고 **반드시** `npm run check` (lint → typecheck → test → build) 를 통과시킨다.
    DB 를 건드렸으면 로컬 Postgres 에 `npm run migrate` 도 돌려 본다(아래 참고).
@@ -76,15 +76,14 @@
    `node scripts/gh.mjs pr-create --title "feat: ..." --body-file /tmp/pr.md`
    "무엇을 / 어떻게 확인했나 / 배포 영향" 을 비우지 않는다. 사용자는 휴대폰으로 PR 을
    볼 수 있다 — 무엇이 바뀌는지 첫 줄에서 알 수 있게 쓴다.
-7. PR 을 연 뒤 `node scripts/gh.mjs pr-watch` 로 CI 를 기다리고 결과(체크, 프리뷰 링크)를
-   사용자에게 한두 줄로 알린다. 실패하면 auto-fix 가 붙지만, 세션이 살아 있으면 직접 고쳐서
-   push 하는 편이 빠르다.
+7. PR 을 연 뒤 `node scripts/gh.mjs pr-watch` 로 CI 와 Claude 리뷰를 기다리고 결과(체크, 프리뷰 링크, 리뷰 판정)를
+   사용자에게 한두 줄로 알린다. CI 가 실패하면 auto-fix 가 붙지만, 세션이 살아 있으면 직접 고쳐서
+   push 하는 편이 빠르다. 리뷰가 "수정 필요" 면 같은 브랜치에서 고쳐 push 한다.
 8. **merge 하지 않는다.** 사용자가 요청해도 "PR 에서 merge 버튼을 눌러 주세요" 라고 안내한다.
    (merge 가 곧 프로덕션 배포이므로 사람이 누르는 것이 이 프로세스의 게이트다.)
 
 PR 이 이미 열려 있는 브랜치에서 추가 요청을 받으면 같은 브랜치에 커밋을 더한다.
-그 전에 `git pull origin <브랜치>` — CI 가 `[claude-refine]`·`[claude-autofix]` 커밋을 더했을 수 있다.
-품질 리뷰 코멘트(🧹)의 **제안**을 사용자가 반영해 달라고 하면 같은 브랜치에서 고친다.
+그 전에 `git pull origin <브랜치>` — CI 가 `[claude-autofix]` 커밋을 더했을 수 있다.
 
 > **GitHub CLI 주의**: 클라우드 세션의 GitHub 프록시는 GraphQL 을 막는다. `gh pr create`,
 > `gh pr list/checks/view`, `gh workflow run` 은 403 이 난다. `scripts/gh.mjs`(REST)나
@@ -102,11 +101,12 @@ PR 이 이미 열려 있는 브랜치에서 추가 요청을 받으면 같은 �
 PR 생성/push ─► ci.yml
                  ├ test     lint · typecheck · test · 빈 Postgres 에 마이그레이션 · build
                  ├ preview  Neon 브랜치(프로덕션 복제)에 마이그레이션 → Vercel 프리뷰 → PR 코멘트
-                 ├ refine   위가 통과하면 Claude 품질 리뷰 → 작은 정리는 [claude-refine] 커밋, 큰 것은 제안 (push 당 1회)
                  └ autofix  위가 실패하면 Claude 가 고쳐서 [claude-autofix] 커밋 (PR 당 최대 3회)
-             ─► claude-review.yml   PR 을 열거나 push 할 때마다 자동 리뷰 코멘트
+             ─► claude-review.yml   PR 을 열거나 push 할 때마다 자동 리뷰 코멘트 (이 리포는 push 마다 — 템플릿은 CI 뒤 PR 당 1회)
 PR 코멘트 @claude ─► claude-mention.yml  지시대로 수정 (리포 주인의 코멘트만)
-merge ─► deploy.yml  프로덕션 마이그레이션 → Vercel 프로덕션 배포 → /api/health 확인 → PR 코멘트
+merge ─► ci.yml 의 test (merge 결과물을 한 번 더, 항상 전체 — 브랜치 보호가 "최신 main 포함" 을 요구하지 않아서)
+      ─► 통과하면 deploy.yml  프로덕션 마이그레이션 → Vercel 프로덕션 배포 → /api/health 확인 → PR 코멘트
+                              (문서만 바뀐 merge 는 배포하지 않음. test 가 실패하면 배포하지 않고 merge 된 PR 에 알림)
 PR 닫힘 ─► preview-cleanup.yml  Neon 프리뷰 브랜치 삭제
 수동     ─► migrate.yml (confirm=migrate) · seed-accounts.yml (confirm=seed)
 ```
