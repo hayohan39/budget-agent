@@ -100,9 +100,17 @@
 
 ### 6. 레포지토리
 
-- **private 유지**
-- `claude-mention.yml` 은 코멘트로 트리거되면서 레포 시크릿에 접근한다. 금융 시크릿을
-  추가하기 전에 트리거 주체를 제한하거나 비활성화한다
+- **public 이어도 된다**(2026-11 변경. 이전: private 유지). 리포에는 코드와 마스킹한
+  fixture 만 있고, 거래 데이터는 Neon 에만 있다. 보호는 리포 가시성이 아니라 아래 규칙과
+  앱 인증(2항)이 맡는다. 공개 리포라서 더 엄격해지는 것:
+  - **Actions 로그를 누구나 읽는다.** 7항의 "CI 로그에 거래 데이터·마스킹되지 않는
+    식별자를 남기지 않는다" 는 이제 공개 페이지 기준이다
+  - **fork 에서 온 PR 은 시크릿을 쓰는 job 을 돌리지 않는다.** `ci.yml` 의 preview ·
+    `claude-review.yml` 은 `head.repo.full_name == github.repository` 일 때만 돈다.
+    이 조건을 빼지 않는다. `pull_request_target` 트리거는 쓰지 않는다
+  - 커밋 · PR 본문 · 이슈 · 코멘트도 공개된다. 금액 · 적요 · 계좌 뒤 4자리를 적지 않는다
+- `claude-mention.yml` 은 코멘트로 트리거되면서 레포 시크릿에 접근한다. 리포 주인의
+  코멘트만 처리한다(`sender.login == repository_owner`). 이 제한을 풀지 않는다
 - 실제 거래 데이터(xlsx · PDF · JSON)를 커밋하지 않는다. fixture 는 마스킹본만
 
 ### 7. 실행 환경
