@@ -24,7 +24,7 @@ test('로그인 없이 열리는 경로', () => {
 });
 
 test('그 밖은 전부 보호된다(접두사로 열리지 않는다)', () => {
-  for (const p of ['/', '/report', '/api/import', '/api/healthz', '/api/health/x', '/api/authorize', '/signinx']) {
+  for (const p of ['/', '/report', '/tax/guide', '/api/import', '/api/healthz', '/api/health/x', '/api/authorize', '/signinx']) {
     assert.equal(protectedPath(p), true, p);
   }
 });
