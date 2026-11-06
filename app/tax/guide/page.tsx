@@ -141,7 +141,7 @@ export default function TaxGuidePage() {
   );
 
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 px-4 py-6 break-keep sm:px-8 sm:py-8">
+    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 px-4 pt-4 pb-6 break-keep sm:px-8 sm:pt-5 sm:pb-8">
       <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
 
       {sections.length > 0 ? (

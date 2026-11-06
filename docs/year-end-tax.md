@@ -122,13 +122,13 @@ IRP                         연결됨
   (`/api/classify*` 와 같은 규칙).
 - 화면은 서버 컴포넌트, `force-dynamic`, 요청마다 세션 + `ALLOWED_EMAILS` 확인. middleware 로그인 관문 뒤.
 
-스키마 초안(확정은 해당 PR 에서):
+스키마(T2 에서 확정, `migrations/*_create-tax-tracker.sql`):
 
 ```
 tax_year_settings (tax_year PK, annual_salary NULL, marginal_rate NULL, homeless_householder NULL,
-                   mortgage_limit_tier NULL, card_confirmed_amount NULL,
-                   card_confirmed_through NULL 'YYYY-MM', updated_at)
+                   mortgage_tier NULL, updated_at)
                   ─ 귀속연도마다 한 행. 비어 있는 칸은 "미입력" 으로 보여 준다
+                  ─ 카드 확인값(누계 · 기준월) 칸은 T3 에서 새 마이그레이션으로 더한다
 tax_item_tags     (category, item) PK → deduction 'pension_savings' | 'irp' | 'housing_subscription'
                    | 'rent' | 'lease_loan' | 'mortgage_interest' | 'insurance'
                    | 'donation_general' | 'donation_political' | 'donation_hometown' | 'none', updated_at

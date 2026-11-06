@@ -221,3 +221,11 @@ test('모든 공제 키가 결과에 한 번씩, 카드가 마지막. 지원 연
   assert.equal(keys.at(-1), 'card');
   for (const year of SUPPORTED_YEARS) assert.equal(rulesFor(year).year, year);
 });
+
+test('규칙: 한계세율 선택지는 세율 구간의 세율과 같고, 구간은 오름차순', () => {
+  for (const year of SUPPORTED_YEARS) {
+    const rules = rulesFor(year);
+    assert.deepEqual(rules.marginalRates, rules.taxBrackets.map((b) => b.pct));
+    for (let i = 1; i < rules.taxBrackets.length; i += 1) assert.ok(rules.taxBrackets[i].upTo > rules.taxBrackets[i - 1].upTo);
+  }
+});
