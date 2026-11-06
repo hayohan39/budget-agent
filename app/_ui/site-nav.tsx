@@ -18,6 +18,9 @@ export const NAV_PAGES = [
   { href: "/report", label: "월별 현금흐름" },
   { href: "/classify", label: "분류 규칙" },
   { href: "/stats", label: "통계" },
+  // 공제 트래커(/tax)가 생기면 href 를 "/tax" 로 바꾸고 가이드는 그 아래 하위 탭이 된다
+  // (docs/year-end-tax.md 6장). isCurrent 가 접두사로 보므로 /tax/guide 도 같은 탭이다.
+  { href: "/tax/guide", label: "연말정산" },
 ] as const;
 
 /** 로그인 전 화면. 여기서는 네비게이션을 그리지 않는다. */
