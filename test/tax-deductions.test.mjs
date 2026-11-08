@@ -150,12 +150,23 @@ test('카드: 기본 한도를 넘으면 전통시장 · 대중교통 공제분�
   const card = pick(run({ salary: 40_000_000, card: { debit: 30_000_000, transit: 3_000_000 } }), 'card');
   assert.equal(card.deduction, 4_200_000);
   assert.equal(card.remaining, 0);
+  assert.equal(card.cardProgress.base, 3_000_000);
+  assert.equal(card.cardProgress.extra, 1_200_000);
+  assert.equal(card.cardProgress.toThreshold, 0);
   assert.ok(card.notes.some((note) => note.startsWith('기본 한도를 다 채웠다')));
 });
 
 test('카드: 문턱 전이면 공제 0, 남은 금액은 문턱까지 + 기본 한도를 체크카드로 채울 금액', () => {
   const card = pick(run({ card: { credit: 10_000_000 } }), 'card');
   assert.equal(card.deduction, 0);
+  assert.deepEqual(card.cardProgress, {
+    threshold: 12_500_000,
+    toThreshold: 2_500_000,
+    baseLimit: 3_000_000,
+    base: 0,
+    extraLimit: 3_000_000,
+    extra: 0,
+  });
   // 문턱 1,250만까지 250만 + 기본 한도 300만 ÷ 30% = 1,000만
   assert.equal(card.remaining, 2_500_000 + 10_000_000);
 });

@@ -15,9 +15,25 @@ import { redirect } from "next/navigation";
 import { auth, isAllowedEmail } from "@/auth";
 import { withClient } from "@/lib/db/client.mjs";
 import { DEDUCTION_KEYS, DEDUCTION_LABELS, rulesFor, SUPPORTED_YEARS } from "@/lib/tax/deductions.mjs";
-import { buildTracker, describeMonths, loadSettings, loadTags, loadYearGroups } from "@/lib/tax/store.mjs";
+import {
+  buildTracker,
+  combineCard,
+  describeMonths,
+  loadCardConfirmation,
+  loadCardUsage,
+  loadSettings,
+  loadTags,
+  loadYearGroups,
+} from "@/lib/tax/store.mjs";
 
-import { ConnectControls, SettingsForm, UnlinkButton, type SettingsValue } from "./forms";
+import {
+  CardConfirmForm,
+  ConnectControls,
+  SettingsForm,
+  UnlinkButton,
+  type CardConfirmationValue,
+  type SettingsValue,
+} from "./forms";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,7 +50,17 @@ type Item = {
   remaining: number | null;
   effectIfFilled: number | null;
   notes: string[];
+  estimated: boolean;
+  cardProgress?: {
+    threshold: number;
+    toThreshold: number;
+    baseLimit: number;
+    base: number;
+    extraLimit: number;
+    extra: number;
+  };
 };
+type CardUsage = { month: string; total: number; byIssuer: Array<{ issuer: string; amount: number }> };
 type Source = { category: string; item: string; net: number };
 type Candidate = Source & { suggested: string | null };
 
@@ -156,6 +182,168 @@ function ItemCard({ item, sources }: { item: Item; sources: Source[] }) {
   );
 }
 
+const monthLabel = (month: string) => `${Number(month.slice(5))}월`;
+
+/** 0~100 막대. */
+function Bar({ value, max, tone = "chart" }: { value: number; max: number; tone?: "chart" | "ok" }) {
+  const width = max <= 0 ? 0 : Math.min(100, Math.round((value / max) * 100));
+  return (
+    <div className="h-1.5 overflow-hidden rounded-full bg-subtle" aria-hidden="true">
+      <div className={`h-full rounded-full ${tone === "ok" ? "bg-ok" : "bg-chart"}`} style={{ width: `${width}%` }} />
+    </div>
+  );
+}
+
+function CardSection({
+  year,
+  item,
+  usage,
+  confirmation,
+  confirmedTotal,
+  estimatedTotal,
+  estimatedMonths,
+}: {
+  year: number;
+  item: Item;
+  usage: CardUsage[];
+  confirmation: CardConfirmationValue | null;
+  confirmedTotal: number;
+  estimatedTotal: number;
+  estimatedMonths: string[];
+}) {
+  const status = STATUS_TEXT[item.status];
+  const progress = item.cardProgress;
+  const used = confirmedTotal + estimatedTotal;
+
+  return (
+    <section aria-labelledby="card-title" className="flex flex-col gap-2">
+      <h2 id="card-title" className="text-[15px] font-semibold tracking-tight">
+        신용카드 등 사용액
+      </h2>
+      <div className="flex flex-col gap-3 rounded-lg border border-line p-3 text-[13px]">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge>소득공제</Badge>
+          {item.estimated ? <Badge tone="warn">추정 포함</Badge> : <Badge>확인값</Badge>}
+          {status !== null ? <Badge tone="warn">{status}</Badge> : null}
+        </div>
+
+        {used === 0 ? (
+          <p className="text-muted">
+            {year}년 사용분으로 볼 카드대금 결제가 아직 없습니다. 확인한 사용액이 있으면 아래에 입력해 주세요.
+          </p>
+        ) : null}
+
+        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+          <dt className="text-muted">올해 사용액</dt>
+          <dd className="tabular-nums">
+            {won(used)}
+            <span className="text-muted">
+              {" "}
+              ({confirmation !== null ? `${monthLabel(confirmation.throughMonth)}까지 확인값 ${won(confirmedTotal)}` : "확인값 없음"}
+              {estimatedTotal > 0
+                ? ` · ${describeMonths(estimatedMonths)} 카드대금 추정 ${won(estimatedTotal)}`
+                : ""}
+              )
+            </span>
+          </dd>
+          {item.deduction !== null ? (
+            <>
+              <dt className="text-muted">소득공제액</dt>
+              <dd className="tabular-nums">{won(item.deduction)}</dd>
+            </>
+          ) : null}
+          <dt className="text-muted">공제 효과</dt>
+          <dd className="font-medium tabular-nums">{item.effect === null ? "—" : won(item.effect)}</dd>
+        </dl>
+
+        {progress !== undefined ? (
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-1">
+              <p className="flex flex-wrap justify-between gap-2 text-xs">
+                <span>문턱(연봉의 25%) {won(progress.threshold)}</span>
+                <span className={progress.toThreshold > 0 ? "text-muted" : "text-ok"}>
+                  {progress.toThreshold > 0 ? `${won(progress.toThreshold)} 남음` : "넘음"}
+                </span>
+              </p>
+              <Bar value={progress.threshold - progress.toThreshold} max={progress.threshold} tone={progress.toThreshold > 0 ? "chart" : "ok"} />
+            </div>
+            <div className="flex flex-col gap-1">
+              <p className="flex flex-wrap justify-between gap-2 text-xs">
+                <span>기본 공제한도 {won(progress.baseLimit)}</span>
+                <span className="text-muted tabular-nums">{won(progress.base)} 공제</span>
+              </p>
+              <Bar value={progress.base} max={progress.baseLimit} />
+            </div>
+            {progress.extra > 0 ? (
+              <p className="text-xs text-muted">
+                전통시장 · 대중교통 추가 한도에서 {won(progress.extra)} 더 공제(한도 {won(progress.extraLimit)})
+              </p>
+            ) : null}
+            {item.remaining !== null && item.remaining > 0 && item.effectIfFilled !== null ? (
+              <p className="text-xs text-ok">
+                체크카드 · 현금영수증으로 {won(item.remaining)} 더 쓰면 기본 한도를 다 채워 +{won(item.effectIfFilled)}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {item.notes.length > 0 ? (
+          <ul className="list-disc pl-4 text-xs text-muted">
+            {item.notes.map((note) => (
+              <li key={note}>{note}</li>
+            ))}
+          </ul>
+        ) : null}
+
+        {usage.length > 0 ? (
+          <details className="border-t border-line pt-2">
+            <summary className="cursor-pointer text-xs text-muted select-none">
+              카드대금으로 본 월별 사용액(결제월을 한 달 앞당김)
+            </summary>
+            <table className="mt-2 w-full border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-line text-left text-muted">
+                  <th scope="col" className="py-1 font-medium">사용월</th>
+                  <th scope="col" className="py-1 font-medium">카드사</th>
+                  <th scope="col" className="py-1 text-right font-medium">합계</th>
+                </tr>
+              </thead>
+              <tbody>
+                {usage.map((row) => {
+                  const replaced = confirmation !== null && row.month <= confirmation.throughMonth;
+                  return (
+                    <tr key={row.month} className={`border-b border-line last:border-0 ${replaced ? "text-faint" : ""}`}>
+                      <td className="py-1 whitespace-nowrap">{monthLabel(row.month)}</td>
+                      <td className="py-1">{row.byIssuer.map((x) => `${x.issuer} ${won(x.amount)}`).join(" · ")}</td>
+                      <td className="py-1 text-right tabular-nums whitespace-nowrap">
+                        {won(row.total)}
+                        {replaced ? " (확인값 사용)" : ""}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </details>
+        ) : null}
+
+        <details className="border-t border-line pt-2" open={used === 0}>
+          <summary className="cursor-pointer text-xs font-medium select-none">
+            확인한 사용액으로 보정하기
+          </summary>
+          <div className="mt-2 flex flex-col gap-2">
+            <p className="text-xs text-muted">
+              홈택스 연말정산 미리보기(11월, 1~9월분)나 카드사 앱에서 결제수단별 누계를 확인해 넣으면 그 달까지는
+              확인값을 쓰고, 그 뒤 달만 카드대금으로 추정합니다.
+            </p>
+            <CardConfirmForm year={year} initial={confirmation} />
+          </div>
+        </details>
+      </div>
+    </section>
+  );
+}
+
 function GroupRows({ rows, options }: { rows: Candidate[]; options: Array<{ key: string; label: string }> }) {
   return (
     <ul className="flex flex-col gap-2">
@@ -199,12 +387,22 @@ export default async function TaxPage({ searchParams }: PageProps<"/tax">) {
   let loaded;
   try {
     loaded = await withClient(async (client) => {
-      const [{ groups, months }, tags, settings] = await Promise.all([
+      const [{ groups, months }, tags, settings, cardUsage, cardConfirmation] = await Promise.all([
         loadYearGroups(client, year),
         loadTags(client),
         loadSettings(client, year),
+        loadCardUsage(client, year),
+        loadCardConfirmation(client, year),
       ]);
-      return { months, settings, view: buildTracker({ year, groups, tags, settings }) };
+      const card = combineCard({ usage: cardUsage, confirmation: cardConfirmation });
+      return {
+        months,
+        settings,
+        cardUsage,
+        cardConfirmation,
+        card,
+        view: buildTracker({ year, groups, tags, settings, card: card.input }),
+      };
     });
   } catch {
     return (
@@ -217,14 +415,19 @@ export default async function TaxPage({ searchParams }: PageProps<"/tax">) {
   }
 
   const rules = rulesFor(year);
-  const { months, settings, view } = loaded;
-  // 카드 공제는 다음 단계(T3)에서 가계부 결제대금 추정과 함께 보여 준다.
-  const items = (view.result.items as Item[]).filter((item) => item.key !== "card");
+  const { months, settings, view, card } = loaded;
+  const cardUsage = loaded.cardUsage as CardUsage[];
+  const cardConfirmation = loaded.cardConfirmation as CardConfirmationValue | null;
+  const allItems = view.result.items as Item[];
+  const cardItem = allItems.find((item) => item.key === "card") as Item;
+  const items = allItems.filter((item) => item.key !== "card");
+  const hasCard = card.confirmedTotal + card.estimatedTotal > 0;
   const sources = view.sources as Record<string, Source[]>;
   const connected = items.filter((item) => sources[item.key].length > 0);
   const unconnected = items.filter((item) => sources[item.key].length === 0);
-  const totalEffect = connected.reduce((sum, item) => sum + (item.effect ?? 0), 0);
-  const needsInput = connected.filter((item) => item.status.startsWith("needs_")).length;
+  const counted = hasCard ? [...connected, cardItem] : connected;
+  const totalEffect = counted.reduce((sum, item) => sum + (item.effect ?? 0), 0);
+  const needsInput = counted.filter((item) => item.status.startsWith("needs_")).length;
 
   const options = DEDUCTION_KEYS.map((key: string) => ({ key, label: (DEDUCTION_LABELS as Record<string, string>)[key] }));
   const brackets = rules.taxBrackets.map((b: { upTo: number; pct: number }) => ({
@@ -244,14 +447,13 @@ export default async function TaxPage({ searchParams }: PageProps<"/tax">) {
         </h2>
         <p className="text-2xl font-semibold tabular-nums">{roughWon(totalEffect)}</p>
         <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
-          <span>연결된 공제 항목 {connected.length}개</span>
+          <span>연결된 공제 항목 {connected.length}개{hasCard ? " + 카드" : ""}</span>
           {needsInput > 0 ? <span className="text-warn">입력 필요 {needsInput}개</span> : null}
           {view.candidates.length > 0 ? <span>확인할 후보 {view.candidates.length}개</span> : null}
           <span>거래내역이 있는 달: {months.length > 0 ? describeMonths(months) : "없음"}</span>
         </p>
         <p className="text-xs text-muted">
           참고용 추정입니다. 공제 효과는 낼 세금이 충분할 때의 최대치이고, 결정세액이 이미 0 이면 늘어나지 않습니다.
-          신용카드 공제는 다음 업데이트에서 추가됩니다.
         </p>
       </section>
 
@@ -291,6 +493,16 @@ export default async function TaxPage({ searchParams }: PageProps<"/tax">) {
           <p className="text-xs text-muted">연결 안 됨: {unconnected.map((item) => item.label).join(" · ")}</p>
         ) : null}
       </section>
+
+      <CardSection
+        year={year}
+        item={cardItem}
+        usage={cardUsage}
+        confirmation={cardConfirmation}
+        confirmedTotal={card.confirmedTotal}
+        estimatedTotal={card.estimatedTotal}
+        estimatedMonths={card.estimatedMonths}
+      />
 
       {view.others.length > 0 ? (
         <details className="flex flex-col gap-2">

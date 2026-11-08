@@ -4,14 +4,20 @@ import test from 'node:test';
 
 import {
   buildTracker,
+  clearCardConfirmation,
+  combineCard,
   deleteTag,
   describeMonths,
   emptySettings,
+  loadCardConfirmation,
+  loadCardUsage,
   loadSettings,
   loadTags,
   loadYearGroups,
+  saveCardConfirmation,
   saveSettings,
   setTag,
+  shiftMonth,
   suggestDeduction,
 } from '../lib/tax/store.mjs';
 import { withScratchDatabase } from './helpers/scratch-db.mjs';
@@ -121,4 +127,97 @@ test('실제 DB: 연도 묶음 집계(환불 차감 · 분류 별칭 · 제외 �
     await assert.rejects(client.query("INSERT INTO tax_item_tags (category, item, deduction) VALUES ('저축', 'ISA', 'isa')"));
     await assert.rejects(client.query('INSERT INTO tax_year_settings (tax_year, marginal_rate) VALUES (2027, 20)'));
   });
+});
+
+test('카드: 확인값이 없으면 전부 추정(신용카드), 있으면 기준월까지 확인값 + 그 뒤 달만 추정', () => {
+  const usage = [
+    { month: '2026-08', total: 1_000_000 },
+    { month: '2026-09', total: 2_000_000 },
+    { month: '2026-10', total: 3_000_000 },
+  ];
+  assert.deepEqual(combineCard({ usage, confirmation: null }), {
+    input: { credit: 6_000_000, debit: 0, culture: 0, market: 0, transit: 0, estimated: true },
+    confirmedTotal: 0,
+    estimatedTotal: 6_000_000,
+    estimatedMonths: ['2026-08', '2026-09', '2026-10'],
+  });
+
+  const confirmation = { throughMonth: '2026-09', credit: 9_000_000, debit: 4_000_000, culture: 0, market: 500_000, transit: 300_000 };
+  assert.deepEqual(combineCard({ usage, confirmation }), {
+    input: { credit: 12_000_000, debit: 4_000_000, culture: 0, market: 500_000, transit: 300_000, estimated: true },
+    confirmedTotal: 13_800_000,
+    estimatedTotal: 3_000_000,
+    estimatedMonths: ['2026-10'],
+  });
+
+  // 12월까지 확인했으면 추정이 없다.
+  const full = combineCard({ usage, confirmation: { ...confirmation, throughMonth: '2026-12' } });
+  assert.equal(full.input.estimated, false);
+  assert.equal(full.estimatedTotal, 0);
+});
+
+test('카드: 결제월을 한 달 앞당긴다', () => {
+  assert.equal(shiftMonth('2026-02', -1), '2026-01');
+  assert.equal(shiftMonth('2027-01', -1), '2026-12');
+  assert.equal(shiftMonth('2026-12', 1), '2027-01');
+});
+
+test('실제 DB: 카드대금 → 사용월 · 카드사별 추정(환불 차감, 귀속연도 밖 제외) · 확인값 왕복', async (t) => {
+  await withScratchDatabase(t, 'tax_card', async (client) => {
+    const rows = [
+      // [txn_at, description, amount] — 모두 카드대금
+      ['2026-01-14T10:00:00+09:00', '삼성카드주식회사', -900_000], // 2025-12 사용분 → 제외
+      ['2026-02-14T10:00:00+09:00', '삼성카드주식회사', -1_000_000], // 2026-01
+      ['2026-02-15T10:00:00+09:00', '현대카드', -500_000], // 2026-01
+      ['2026-03-14T10:00:00+09:00', '삼성카드주식회사', -1_200_000], // 2026-02
+      ['2026-03-20T10:00:00+09:00', '삼성카드주식회사', 200_000], // 2026-02 환불
+      ['2027-01-14T10:00:00+09:00', 'KB카드출금', -700_000], // 2026-12
+      ['2027-02-14T10:00:00+09:00', 'KB카드출금', -800_000], // 2027-01 → 제외
+    ];
+    let n = 0;
+    for (const [at, description, amount] of rows) {
+      n += 1;
+      await client.query(
+        `INSERT INTO transactions (account_id, txn_at, description, txn_type, amount, category, dedupe_key, year_month)
+         VALUES (1, $1, $2, '펌뱅킹출금', $3, '카드대금', $4, to_char(($1::timestamptz AT TIME ZONE 'Asia/Seoul'), 'YYYY-MM'))`,
+        [at, description, amount, `tax-card-${n}`],
+      );
+    }
+
+    assert.deepEqual(await loadCardUsage(client, 2026), [
+      {
+        month: '2026-01',
+        total: 1_500_000,
+        byIssuer: [
+          { issuer: '삼성카드', amount: 1_000_000 },
+          { issuer: '현대카드', amount: 500_000 },
+        ],
+      },
+      { month: '2026-02', total: 1_000_000, byIssuer: [{ issuer: '삼성카드', amount: 1_000_000 }] },
+      { month: '2026-12', total: 700_000, byIssuer: [{ issuer: 'KB국민카드', amount: 700_000 }] },
+    ]);
+
+    assert.equal(await loadCardConfirmation(client, 2026), null);
+    const value = { throughMonth: '2026-09', credit: 9_000_000, debit: 4_000_000, culture: 0, market: 500_000, transit: 300_000 };
+    await saveCardConfirmation(client, 2026, value);
+    assert.deepEqual(await loadCardConfirmation(client, 2026), value);
+    await saveCardConfirmation(client, 2026, { ...value, throughMonth: '2026-10', debit: 0 });
+    assert.equal((await loadCardConfirmation(client, 2026)).throughMonth, '2026-10');
+    await clearCardConfirmation(client, 2026);
+    assert.equal(await loadCardConfirmation(client, 2026), null);
+    await assert.rejects(saveCardConfirmation(client, 2026, { ...value, throughMonth: '2025-12' }));
+  });
+});
+
+test('화면 조립에 카드 입력을 넘기면 엔진의 카드 항목이 계산된다', () => {
+  const view = buildTracker({
+    year: 2026,
+    groups: [],
+    tags: [],
+    settings: { salary: 50_000_000, marginalRate: 15, homelessHouseholder: null, mortgageTier: null },
+    card: { credit: 18_000_000, estimated: true },
+  });
+  const card = view.result.items.find((it) => it.key === 'card');
+  assert.equal(card.deduction, 825_000);
+  assert.equal(card.estimated, true);
 });

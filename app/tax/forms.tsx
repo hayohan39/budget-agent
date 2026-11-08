@@ -314,3 +314,109 @@ export function UnlinkButton({ group, label }: { group: Group; label: string }) 
     </span>
   );
 }
+
+// ── 카드 확인값 ───────────────────────────────────────────────────────────
+
+export type CardConfirmationValue = {
+  throughMonth: string;
+  credit: number;
+  debit: number;
+  culture: number;
+  market: number;
+  transit: number;
+};
+
+const CARD_FIELDS = [
+  { key: "credit", label: "신용카드" },
+  { key: "debit", label: "체크카드 · 현금영수증" },
+  { key: "market", label: "전통시장" },
+  { key: "transit", label: "대중교통" },
+  { key: "culture", label: "도서 · 공연 · 체육시설" },
+] as const;
+
+type CardKey = (typeof CARD_FIELDS)[number]["key"];
+
+/**
+ * 홈택스 연말정산 미리보기 · 카드사 앱에서 확인한 기준월까지의 결제수단별 누계.
+ * 원 단위로 받는다(쉼표 허용). 빈칸은 0.
+ */
+export function CardConfirmForm({ year, initial }: { year: number; initial: CardConfirmationValue | null }) {
+  const uid = useId();
+  const { status, send, fail, busy } = useSender();
+  const [month, setMonth] = useState(initial?.throughMonth ?? `${year}-09`);
+  const [amounts, setAmounts] = useState<Record<CardKey, string>>(() => {
+    const out = {} as Record<CardKey, string>;
+    for (const field of CARD_FIELDS) {
+      const value = initial?.[field.key] ?? 0;
+      out[field.key] = value === 0 ? "" : value.toLocaleString("ko-KR");
+    }
+    return out;
+  });
+
+  async function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    const body: Record<string, unknown> = { year, action: "set", throughMonth: month };
+    for (const field of CARD_FIELDS) {
+      const text = amounts[field.key].replaceAll(",", "").trim();
+      if (text !== "" && !/^[0-9]{1,11}$/.test(text)) {
+        fail(`${field.label} 금액은 원 단위 숫자로 입력해 주세요.`);
+        return;
+      }
+      body[field.key] = text === "" ? 0 : Number(text);
+    }
+    await send("/api/tax/card", body, "저장했습니다.");
+  }
+
+  const months = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, "0")}`);
+
+  return (
+    <form onSubmit={onSubmit} className="flex flex-col gap-3 text-[13px]">
+      <label htmlFor={`${uid}-month`} className="flex flex-wrap items-center gap-2">
+        <span className="font-medium">기준월</span>
+        <select id={`${uid}-month`} value={month} onChange={(event) => setMonth(event.target.value)} className={INPUT}>
+          {months.map((value) => (
+            <option key={value} value={value}>
+              {Number(value.slice(5))}월까지
+            </option>
+          ))}
+        </select>
+        <span className="text-xs text-muted">이 달까지는 아래 값을 쓰고, 그 뒤 달만 카드대금으로 추정합니다.</span>
+      </label>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {CARD_FIELDS.map((field) => (
+          <label key={field.key} htmlFor={`${uid}-${field.key}`} className="flex items-center justify-between gap-2">
+            <span>{field.label}</span>
+            <span className="flex items-center gap-1">
+              <input
+                id={`${uid}-${field.key}`}
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="0"
+                value={amounts[field.key]}
+                onChange={(event) => setAmounts({ ...amounts, [field.key]: event.target.value })}
+                className={`${INPUT} w-36 text-right tabular-nums`}
+              />
+              <span className="text-muted">원</span>
+            </span>
+          </label>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="submit" disabled={busy} className={BUTTON}>
+          {busy ? "저장 중…" : "확인값 저장"}
+        </button>
+        {initial !== null ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => send("/api/tax/card", { year, action: "clear" }, "확인값을 지웠습니다. 다시 전부 추정합니다.")}
+            className={QUIET_BUTTON}
+          >
+            확인값 지우기
+          </button>
+        ) : null}
+        <StatusLine status={status} />
+      </div>
+    </form>
+  );
+}
