@@ -21,17 +21,23 @@ import {
   describeMonths,
   loadCardConfirmation,
   loadCardUsage,
+  loadManualEntries,
+  loadPatternTags,
+  loadSavedPatterns,
   loadSettings,
   loadTags,
-  loadYearGroups,
+  loadYearRows,
 } from "@/lib/tax/store.mjs";
 
 import {
   CardConfirmForm,
   ConnectControls,
+  ManualAddForm,
+  ManualEntryControls,
   SettingsForm,
   UnlinkButton,
   type CardConfirmationValue,
+  type LinkTarget,
   type SettingsValue,
 } from "./forms";
 
@@ -61,8 +67,22 @@ type Item = {
   };
 };
 type CardUsage = { month: string; total: number; byIssuer: Array<{ issuer: string; amount: number }> };
-type Source = { category: string; item: string; net: number };
-type Candidate = Source & { suggested: string | null };
+type Source =
+  | { kind: "group"; category: string; item: string; net: number }
+  | { kind: "pattern"; basis: string; direction: string; pattern: string; net: number }
+  | { kind: "manual"; id: string; label: string; net: number };
+type Candidate =
+  | { kind: "group"; category: string; item: string; net: number; suggested: string | null }
+  | {
+      kind: "pattern";
+      basis: string;
+      direction: string;
+      pattern: string;
+      category: string;
+      item: string | null;
+      net: number;
+      suggested: string | null;
+    };
 
 const STATUS_TEXT: Record<Item["status"], string | null> = {
   ok: null,
@@ -110,9 +130,51 @@ function GroupName({ group }: { group: { category: string; item: string } }) {
   );
 }
 
-function ItemCard({ item, sources }: { item: Item; sources: Source[] }) {
+const BASIS_TEXT: Record<string, string> = { description: "적요", memo: "메모" };
+const DIRECTION_TEXT: Record<string, string> = { in: "입금", out: "출금", any: "방향 무관" };
+
+/** 가계부 패턴 이름: `패턴 길동 IRP ##회 · 메모 · 출금`. */
+function PatternName({ pattern }: { pattern: { basis: string; direction: string; pattern: string } }) {
+  return (
+    <span className="break-all">
+      <span className="text-muted">패턴 </span>
+      <code className="rounded border border-line bg-subtle px-1 font-mono text-[12px] font-medium">{pattern.pattern}</code>
+      <span className="text-xs text-muted">
+        {" "}
+        · {BASIS_TEXT[pattern.basis] ?? pattern.basis} · {DIRECTION_TEXT[pattern.direction] ?? pattern.direction}
+      </span>
+    </span>
+  );
+}
+
+function SourceName({ source }: { source: Source }) {
+  if (source.kind === "pattern") return <PatternName pattern={source} />;
+  if (source.kind === "manual") {
+    return (
+      <span className="break-all">
+        <span className="text-muted">직접 입력 › </span>
+        <span className="font-medium">{source.label}</span>
+      </span>
+    );
+  }
+  return <GroupName group={source} />;
+}
+
+/** 연결 · 제외를 저장하는 대상. 직접 입력은 대상이 아니다. */
+function targetOf(source: Exclude<Source, { kind: "manual" }> | Candidate): LinkTarget {
+  return source.kind === "pattern"
+    ? { kind: "pattern", basis: source.basis, direction: source.direction, pattern: source.pattern }
+    : { kind: "group", category: source.category, item: source.item };
+}
+
+function sourceKey(source: Source | Candidate) {
+  if (source.kind === "pattern") return `p\u001f${source.basis}\u001f${source.direction}\u001f${source.pattern}`;
+  if (source.kind === "manual") return `m\u001f${source.id}`;
+  return `g\u001f${source.category}\u001f${source.item}`;
+}
+
+function ItemCard({ item, sources, limit }: { item: Item; sources: Source[]; limit: number | null }) {
   const status = STATUS_TEXT[item.status];
-  const limit = item.remaining === null || item.eligibleAmount === null ? null : item.eligibleAmount + item.remaining;
   const filled = limit === null || limit === 0 ? null : Math.min(100, Math.round(((item.eligibleAmount ?? 0) / limit) * 100));
 
   return (
@@ -127,7 +189,13 @@ function ItemCard({ item, sources }: { item: Item; sources: Source[] }) {
         <dt className="text-muted">올해 누적</dt>
         <dd className="tabular-nums">
           {won(item.amount)}
-          {limit !== null && item.key !== "lease_loan" ? <span className="text-muted"> / 한도 {won(limit)}</span> : null}
+          {limit !== null ? (
+            <span className="text-muted">
+              {" "}
+              / 한도 {won(limit)}
+              {item.key === "irp" ? "(연금저축 합산)" : ""}
+            </span>
+          ) : null}
         </dd>
         {item.deduction !== null ? (
           <>
@@ -165,15 +233,19 @@ function ItemCard({ item, sources }: { item: Item; sources: Source[] }) {
       ) : null}
 
       <div className="flex flex-col gap-1 border-t border-line pt-2">
-        <p className="text-xs text-muted">연결된 가계부 항목</p>
+        <p className="text-xs text-muted">연결된 항목</p>
         <ul className="flex flex-col gap-1">
           {sources.map((source) => (
-            <li key={`${source.category}\u001f${source.item}`} className="flex flex-wrap items-center justify-between gap-2">
-              <GroupName group={source} />
-              <span className="flex items-center gap-2">
-                <span className="tabular-nums text-muted">{won(source.net)}</span>
-                <UnlinkButton group={source} label="연결 해제" />
-              </span>
+            <li key={sourceKey(source)} className="flex flex-wrap items-center justify-between gap-2">
+              <SourceName source={source} />
+              {source.kind === "manual" ? (
+                <ManualEntryControls entry={source} />
+              ) : (
+                <span className="flex items-center gap-2">
+                  <span className="tabular-nums text-muted">{won(source.net)}</span>
+                  <UnlinkButton target={targetOf(source)} label="연결 해제" />
+                </span>
+              )}
             </li>
           ))}
         </ul>
@@ -223,7 +295,7 @@ function CardSection({
       <div className="flex flex-col gap-3 rounded-lg border border-line p-3 text-[13px]">
         <div className="flex flex-wrap items-center gap-2">
           <Badge>소득공제</Badge>
-          {item.estimated ? <Badge tone="warn">추정 포함</Badge> : <Badge>확인값</Badge>}
+          {used > 0 ? item.estimated ? <Badge tone="warn">추정 포함</Badge> : <Badge>확인값</Badge> : null}
           {status !== null ? <Badge tone="warn">{status}</Badge> : null}
         </div>
 
@@ -279,7 +351,7 @@ function CardSection({
                 전통시장 · 대중교통 추가 한도에서 {won(progress.extra)} 더 공제(한도 {won(progress.extraLimit)})
               </p>
             ) : null}
-            {item.remaining !== null && item.remaining > 0 && item.effectIfFilled !== null ? (
+            {used > 0 && item.remaining !== null && item.remaining > 0 && item.effectIfFilled !== null ? (
               <p className="text-xs text-ok">
                 체크카드 · 현금영수증으로 {won(item.remaining)} 더 쓰면 기본 한도를 다 채워 +{won(item.effectIfFilled)}
               </p>
@@ -349,14 +421,17 @@ function GroupRows({ rows, options }: { rows: Candidate[]; options: Array<{ key:
     <ul className="flex flex-col gap-2">
       {rows.map((row) => (
         <li
-          key={`${row.category}\u001f${row.item}`}
+          key={sourceKey(row)}
           className="flex flex-col gap-2 rounded-lg border border-line p-3 text-[13px] sm:flex-row sm:items-center sm:justify-between"
         >
-          <span className="flex flex-col">
-            <GroupName group={row} />
-            <span className="text-xs tabular-nums text-muted">올해 {won(row.net)}</span>
+          <span className="flex flex-col gap-0.5">
+            {row.kind === "pattern" ? <PatternName pattern={row} /> : <GroupName group={row} />}
+            <span className="text-xs tabular-nums text-muted">
+              올해 {won(row.net)}
+              {row.kind === "pattern" ? ` · 가계부 분류 ${row.category}${row.item !== null ? ` › ${row.item}` : ""}` : ""}
+            </span>
           </span>
-          <ConnectControls group={{ category: row.category, item: row.item }} suggested={row.suggested} options={options} />
+          <ConnectControls target={targetOf(row)} suggested={row.suggested} options={options} />
         </li>
       ))}
     </ul>
@@ -387,13 +462,17 @@ export default async function TaxPage({ searchParams }: PageProps<"/tax">) {
   let loaded;
   try {
     loaded = await withClient(async (client) => {
-      const [{ groups, months }, tags, settings, cardUsage, cardConfirmation] = await Promise.all([
-        loadYearGroups(client, year),
-        loadTags(client),
-        loadSettings(client, year),
-        loadCardUsage(client, year),
-        loadCardConfirmation(client, year),
-      ]);
+      const [{ rows, months }, tags, patternTags, savedPatterns, manualEntries, settings, cardUsage, cardConfirmation] =
+        await Promise.all([
+          loadYearRows(client, year),
+          loadTags(client),
+          loadPatternTags(client),
+          loadSavedPatterns(client),
+          loadManualEntries(client, year),
+          loadSettings(client, year),
+          loadCardUsage(client, year),
+          loadCardConfirmation(client, year),
+        ]);
       const card = combineCard({ usage: cardUsage, confirmation: cardConfirmation });
       return {
         months,
@@ -401,7 +480,16 @@ export default async function TaxPage({ searchParams }: PageProps<"/tax">) {
         cardUsage,
         cardConfirmation,
         card,
-        view: buildTracker({ year, groups, tags, settings, card: card.input }),
+        view: buildTracker({
+          year,
+          rows,
+          tags,
+          patternTags,
+          savedPatterns,
+          manualEntries,
+          settings,
+          card: card.input,
+        }),
       };
     });
   } catch {
@@ -434,6 +522,14 @@ export default async function TaxPage({ searchParams }: PageProps<"/tax">) {
     upTo: Number.isFinite(b.upTo) ? b.upTo : null,
     pct: b.pct,
   }));
+  // 카드에 보여 줄 "한도" 는 법정 한도 그대로다(남은 한도는 따로 보여 준다). 한도가 금액이 아닌 항목은 뺀다.
+  const limits: Record<string, number> = {
+    pension_savings: rules.pension.savingsLimit,
+    irp: rules.pension.totalLimit,
+    housing_subscription: rules.housingSubscription.paymentLimit,
+    rent: rules.rent.limit,
+    insurance: rules.insurance.limit,
+  };
   const tiers = Object.entries(rules.mortgageInterest.tiers as Record<string, { label: string }>).map(([key, tier]) => ({
     key,
     label: tier.label,
@@ -470,7 +566,8 @@ export default async function TaxPage({ searchParams }: PageProps<"/tax">) {
             확인할 후보
           </h2>
           <p className="text-xs text-muted">
-            가계부 항목 이름으로 찾은 후보입니다. 연결해야 금액이 잡힙니다. 한 번 연결하면 다음 거래부터 자동입니다.
+            가계부 항목 이름 · 가계부 패턴으로 찾은 후보입니다. 연결해야 금액이 잡히고, 한 번 연결하면 다음 거래부터
+            자동입니다. 가계부에서 패턴으로 묶인 거래는 여기서도 패턴 하나로 보입니다. 아니면 [후보에서 제외].
           </p>
           <GroupRows rows={view.candidates as Candidate[]} options={options} />
         </section>
@@ -483,7 +580,7 @@ export default async function TaxPage({ searchParams }: PageProps<"/tax">) {
         {connected.length > 0 ? (
           <ul className="flex flex-col gap-3">
             {connected.map((item) => (
-              <ItemCard key={item.key} item={item} sources={sources[item.key]} />
+              <ItemCard key={item.key} item={item} sources={sources[item.key]} limit={limits[item.key] ?? null} />
             ))}
           </ul>
         ) : (
@@ -492,6 +589,16 @@ export default async function TaxPage({ searchParams }: PageProps<"/tax">) {
         {unconnected.length > 0 ? (
           <p className="text-xs text-muted">연결 안 됨: {unconnected.map((item) => item.label).join(" · ")}</p>
         ) : null}
+        <details className="rounded-lg border border-line p-3">
+          <summary className="cursor-pointer text-[13px] font-medium select-none">가계부 밖 금액 직접 추가</summary>
+          <div className="mt-2 flex flex-col gap-2">
+            <p className="text-xs text-muted">
+              가계부 계좌에서 나가지 않는 공제 대상 금액(예: 다른 은행에서 내는 연금저축)을 적어 두면 같은 공제 항목에
+              더해집니다. 올해 낸 누계를 적고, 늘어나면 고쳐 주세요.
+            </p>
+            <ManualAddForm year={year} options={options} />
+          </div>
+        </details>
       </section>
 
       <CardSection
@@ -518,13 +625,16 @@ export default async function TaxPage({ searchParams }: PageProps<"/tax">) {
       {view.dismissed.length > 0 ? (
         <details>
           <summary className="cursor-pointer text-[13px] font-medium select-none">
-            공제 아님으로 표시한 항목 ({view.dismissed.length})
+            후보에서 제외한 항목 ({view.dismissed.length})
           </summary>
           <ul className="mt-2 flex flex-col gap-1 text-[13px]">
-            {(view.dismissed as Source[]).map((row) => (
-              <li key={`${row.category}\u001f${row.item}`} className="flex flex-wrap items-center justify-between gap-2">
-                <GroupName group={row} />
-                <UnlinkButton group={row} label="되돌리기" />
+            {(view.dismissed as Array<Exclude<Source, { kind: "manual" }>>).map((row) => (
+              <li key={sourceKey(row)} className="flex flex-wrap items-center justify-between gap-2">
+                <SourceName source={row} />
+                <span className="flex items-center gap-2">
+                  <span className="tabular-nums text-muted">{won(row.net)}</span>
+                  <UnlinkButton target={targetOf(row)} label="되돌리기" />
+                </span>
               </li>
             ))}
           </ul>

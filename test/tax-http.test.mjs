@@ -7,9 +7,13 @@ import test from 'node:test';
 
 import {
   handleTaxCardPost,
+  handleTaxManualPost,
+  handleTaxPatternPost,
   handleTaxSettingsPost,
   handleTaxTagPost,
   parseCardRequest,
+  parseManualRequest,
+  parsePatternTagRequest,
   parseSettingsRequest,
   parseTagRequest,
 } from '../lib/tax/http.mjs';
@@ -199,4 +203,77 @@ test('카드 확인값 저장 · 지우기: 가드 뒤에서만 DB, 금액을 �
   const clear = await handleTaxCardPost(request('/api/tax/card', { year: 2026, action: 'clear' }), d);
   assert.equal(clear.status, 200);
   assert.match(d.queries[1].text, /^DELETE FROM tax_card_confirmations/);
+});
+
+
+test('패턴 연결 요청: 기준 · 방향 · 패턴은 가계부 패턴과 같은 검사, 정규화한 패턴을 키로', () => {
+  assert.deepEqual(
+    parsePatternTagRequest({ action: 'set', basis: 'memo', direction: 'out', pattern: '  길동   IRP ##회 ', deduction: 'irp' }),
+    { ok: true, value: { action: 'set', basis: 'memo', direction: 'out', pattern: '길동 IRP ##회', deduction: 'irp' } },
+  );
+  assert.deepEqual(parsePatternTagRequest({ action: 'delete', basis: 'description', direction: 'any', pattern: '길동 IRP ##회' }).value, {
+    action: 'delete',
+    basis: 'description',
+    direction: 'any',
+    pattern: '길동 IRP ##회',
+  });
+  for (const bad of [
+    { action: 'set', basis: 'account', direction: 'out', pattern: '길동 IRP ##회', deduction: 'irp' },
+    { action: 'set', basis: 'memo', direction: 'sideways', pattern: '길동 IRP ##회', deduction: 'irp' },
+    { action: 'set', basis: 'memo', direction: 'out', pattern: '와일드카드없음', deduction: 'irp' },
+    { action: 'set', basis: 'memo', direction: 'out', pattern: '*', deduction: 'irp' },
+    { action: 'set', basis: 'memo', direction: 'out', pattern: '길동 IRP ##회', deduction: 'isa' },
+    { action: 'delete', basis: 'memo', direction: 'out', pattern: '길동 IRP ##회', deduction: 'irp' },
+  ]) {
+    assert.equal(parsePatternTagRequest(bad).ok, false, JSON.stringify(bad));
+  }
+});
+
+test('직접 입력 요청: add · update · delete, 이름 1~40자 · 금액 0 이상 정수 · id 는 숫자 문자열', () => {
+  assert.deepEqual(parseManualRequest({ action: 'add', year: 2026, deduction: 'pension_savings', label: ' ○○증권  연금저축 ', amount: 2_400_000 }), {
+    ok: true,
+    value: { action: 'add', year: 2026, deduction: 'pension_savings', label: '○○증권 연금저축', amount: 2_400_000 },
+  });
+  assert.equal(parseManualRequest({ action: 'update', id: '12', label: '연금저축', amount: 0 }).ok, true);
+  assert.equal(parseManualRequest({ action: 'delete', id: '12' }).ok, true);
+  for (const bad of [
+    { action: 'add', year: 2026, deduction: 'card', label: 'x', amount: 1 },
+    { action: 'add', year: 2026, deduction: 'irp', label: '', amount: 1 },
+    { action: 'add', year: 2026, deduction: 'irp', label: 'x'.repeat(41), amount: 1 },
+    { action: 'add', year: 2026, deduction: 'irp', label: 'a\u0007', amount: 1 },
+    { action: 'add', year: 2026, deduction: 'irp', label: 'x', amount: -1 },
+    { action: 'add', year: 2019, deduction: 'irp', label: 'x', amount: 1 },
+    { action: 'update', id: 12, label: 'x', amount: 1 },
+    { action: 'update', id: '0', label: 'x', amount: 1 },
+    { action: 'delete', id: '1; DROP TABLE' },
+    { action: 'delete', id: '1', label: 'x' },
+    { action: 'rename', id: '1' },
+  ]) {
+    assert.equal(parseManualRequest(bad).ok, false, JSON.stringify(bad));
+  }
+});
+
+test('패턴 · 직접 입력 저장: 가드 뒤에서만 DB, 이름 · 금액 · 패턴을 되비추지 않는다, 없는 id 는 404', async () => {
+  for (const [handler, path, body] of [
+    [handleTaxPatternPost, '/api/tax/patterns', { action: 'set', basis: 'memo', direction: 'out', pattern: '길동 IRP ##회', deduction: 'irp' }],
+    [handleTaxManualPost, '/api/tax/manual', { action: 'add', year: 2026, deduction: 'irp', label: '비밀연금', amount: 7_654_321 }],
+  ]) {
+    const blocked = deps({ session: { user: { email: 'x@example.com' } } });
+    assert.equal((await handler(request(path, body), blocked)).status, 403);
+    assert.equal(blocked.queries.length, 0);
+
+    const d = deps();
+    const response = await handler(request(path, body), d);
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    for (const secret of ['길동', '비밀연금', '7654321']) assert.ok(!text.includes(secret), secret);
+    assert.equal(d.queries.length, 1);
+  }
+
+  const missing = {
+    ...deps(),
+    withClient: async (fn) => fn({ query: async () => ({ rows: [], rowCount: 0 }) }),
+  };
+  const notFound = await handleTaxManualPost(request('/api/tax/manual', { action: 'delete', id: '99' }), missing);
+  assert.equal(notFound.status, 404);
 });
