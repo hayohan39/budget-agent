@@ -236,25 +236,40 @@ export function SettingsForm({
   );
 }
 
-// ── 묶음 연결 ─────────────────────────────────────────────────────────────
+// ── 묶음 · 패턴 연결 ──────────────────────────────────────────────────────
 
 export type DeductionOption = { key: string; label: string };
 
-type Group = { category: string; item: string };
+/** 연결 대상: 가계부 (분류, 항목) 묶음, 또는 가계부 패턴(기준 · 방향 · 패턴). */
+export type LinkTarget =
+  | { kind: "group"; category: string; item: string }
+  | { kind: "pattern"; basis: string; direction: string; pattern: string };
 
-/** 후보 · 그 밖의 묶음: 공제 항목을 골라 연결하거나 "공제 아님" 으로 표시. */
+/** 대상 → 저장 API 와 본문의 키. 금액 · 다른 값은 보내지 않는다. */
+function endpointOf(target: LinkTarget): { url: string; key: Record<string, string> } {
+  if (target.kind === "pattern") {
+    return {
+      url: "/api/tax/patterns",
+      key: { basis: target.basis, direction: target.direction, pattern: target.pattern },
+    };
+  }
+  return { url: "/api/tax/tags", key: { category: target.category, item: target.item } };
+}
+
+/** 후보: 공제 항목을 골라 연결하거나 "후보에서 제외". 제외한 것은 아래 "제외한 항목" 에서 되돌릴 수 있다. */
 export function ConnectControls({
-  group,
+  target,
   suggested,
   options,
 }: {
-  group: Group;
+  target: LinkTarget;
   suggested: string | null;
   options: DeductionOption[];
 }) {
   const uid = useId();
   const { status, send, busy } = useSender();
   const [choice, setChoice] = useState(suggested ?? "");
+  const { url, key } = endpointOf(target);
 
   return (
     <div className="flex flex-col gap-1">
@@ -278,7 +293,7 @@ export function ConnectControls({
         <button
           type="button"
           disabled={busy || choice === ""}
-          onClick={() => send("/api/tax/tags", { action: "set", ...group, deduction: choice }, "연결했습니다.")}
+          onClick={() => send(url, { action: "set", ...key, deduction: choice }, "연결했습니다.")}
           className={BUTTON}
         >
           연결
@@ -286,10 +301,10 @@ export function ConnectControls({
         <button
           type="button"
           disabled={busy}
-          onClick={() => send("/api/tax/tags", { action: "set", ...group, deduction: "none" }, "공제 아님으로 표시했습니다.")}
-          className={QUIET_BUTTON}
+          onClick={() => send(url, { action: "set", ...key, deduction: "none" }, "후보에서 제외했습니다.")}
+          className={BUTTON}
         >
-          공제 아님
+          후보에서 제외
         </button>
       </div>
       <StatusLine status={status} />
@@ -297,18 +312,137 @@ export function ConnectControls({
   );
 }
 
-/** 연결 해제 · "공제 아님" 되돌리기. 둘 다 연결 행을 지운다. */
-export function UnlinkButton({ group, label }: { group: Group; label: string }) {
+/** 연결 해제 · 제외 되돌리기. 둘 다 연결 행을 지운다. */
+export function UnlinkButton({ target, label }: { target: LinkTarget; label: string }) {
   const { status, send, busy } = useSender();
+  const { url, key } = endpointOf(target);
   return (
     <span className="inline-flex items-center gap-2">
       <button
         type="button"
         disabled={busy}
-        onClick={() => send("/api/tax/tags", { action: "delete", ...group }, "해제했습니다.")}
+        onClick={() => send(url, { action: "delete", ...key }, "해제했습니다.")}
         className={QUIET_BUTTON}
       >
         {label}
+      </button>
+      <StatusLine status={status} />
+    </span>
+  );
+}
+
+// ── 직접 입력 ─────────────────────────────────────────────────────────────
+
+/** 원 단위 입력(쉼표 허용) → 정수. 형식이 틀리면 null. */
+function parseWon(text: string): number | null {
+  const plain = text.replaceAll(",", "").trim();
+  if (!/^[0-9]{1,11}$/.test(plain)) return null;
+  return Number(plain);
+}
+
+/** 가계부 밖에서 내는 공제 대상 금액 추가(예: 다른 은행 연금저축). */
+export function ManualAddForm({ year, options }: { year: number; options: DeductionOption[] }) {
+  const uid = useId();
+  const { status, send, fail, busy } = useSender();
+  const [deduction, setDeduction] = useState(options[0]?.key ?? "");
+  const [label, setLabel] = useState("");
+  const [amount, setAmount] = useState("");
+
+  async function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    const won = parseWon(amount);
+    if (label.trim() === "") return fail("이름을 입력해 주세요(예: ○○증권 연금저축).");
+    if (won === null) return fail("금액은 원 단위 숫자로 입력해 주세요.");
+    await send("/api/tax/manual", { action: "add", year, deduction, label, amount: won }, "추가했습니다.");
+    setLabel("");
+    setAmount("");
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="flex flex-col gap-2 text-[13px]">
+      <div className="flex flex-wrap items-end gap-2">
+        <label htmlFor={`${uid}-deduction`} className="flex flex-col gap-1">
+          <span className="text-xs text-muted">공제 항목</span>
+          <select id={`${uid}-deduction`} value={deduction} onChange={(event) => setDeduction(event.target.value)} className={INPUT}>
+            {options.map((option) => (
+              <option key={option.key} value={option.key}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label htmlFor={`${uid}-label`} className="flex flex-col gap-1">
+          <span className="text-xs text-muted">이름</span>
+          <input
+            id={`${uid}-label`}
+            maxLength={40}
+            autoComplete="off"
+            placeholder="예: ○○증권 연금저축"
+            value={label}
+            onChange={(event) => setLabel(event.target.value)}
+            className={`${INPUT} w-48`}
+          />
+        </label>
+        <label htmlFor={`${uid}-amount`} className="flex flex-col gap-1">
+          <span className="text-xs text-muted">올해 납입 누계</span>
+          <span className="flex items-center gap-1">
+            <input
+              id={`${uid}-amount`}
+              inputMode="numeric"
+              autoComplete="off"
+              placeholder="0"
+              value={amount}
+              onChange={(event) => setAmount(event.target.value)}
+              className={`${INPUT} w-36 text-right tabular-nums`}
+            />
+            <span className="text-muted">원</span>
+          </span>
+        </label>
+        <button type="submit" disabled={busy} className={BUTTON}>
+          추가
+        </button>
+      </div>
+      <StatusLine status={status} />
+    </form>
+  );
+}
+
+/** 직접 입력 한 줄: 금액 고치기 · 삭제. 이름은 그대로 다시 보낸다. */
+export function ManualEntryControls({ entry }: { entry: { id: string; label: string; net: number } }) {
+  const uid = useId();
+  const { status, send, fail, busy } = useSender();
+  const [amount, setAmount] = useState(entry.net.toLocaleString("ko-KR"));
+
+  async function save() {
+    const won = parseWon(amount);
+    if (won === null) return fail("금액은 원 단위 숫자로 입력해 주세요.");
+    await send("/api/tax/manual", { action: "update", id: entry.id, label: entry.label, amount: won }, "고쳤습니다.");
+  }
+
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <label htmlFor={`${uid}-amount`} className="sr-only">
+        {entry.label} 금액
+      </label>
+      <input
+        id={`${uid}-amount`}
+        inputMode="numeric"
+        autoComplete="off"
+        value={amount}
+        onChange={(event) => setAmount(event.target.value)}
+        className={`${INPUT} h-7 w-32 text-right tabular-nums`}
+      />
+      <span className="text-muted">원</span>
+      <button type="button" disabled={busy} onClick={save} className={QUIET_BUTTON}>
+        저장
+      </button>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => send("/api/tax/manual", { action: "delete", id: entry.id }, "삭제했습니다.")}
+        className={QUIET_BUTTON}
+      >
+        삭제
       </button>
       <StatusLine status={status} />
     </span>

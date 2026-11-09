@@ -56,13 +56,19 @@
 `lib/classify/item.mjs`). 트래커는 이 묶음을 공제 항목에 연결한다.
 
 - `tax_item_tags` (분류, 항목) → 공제 항목. `merchant_map` 처럼 한 번 고르면 계속 적용된다.
-  "공제 항목 아님" 도 연결의 한 종류로 저장해서 같은 후보를 다시 묻지 않는다.
+  **후보에서 제외**(`none`)도 연결의 한 종류로 저장해서 같은 후보를 다시 묻지 않는다(되돌릴 수 있다).
+- `tax_pattern_tags` (기준, 방향, 패턴) → 공제 항목 | `none` (2026-11 사용자 요청). 가계부의 적요 · 메모
+  패턴(`길동 IRP ##회`)과 **같은 키 · 같은 매처**(`lib/classify/wildcard.mjs`)라, 가계부에서 패턴으로 묶인
+  거래(달마다 적요가 다른 거래)가 트래커에서도 패턴 하나로 잡힌다. 가계부에 저장된 패턴은 후보로 보여 준다.
+- `tax_manual_entries` 가계부 밖 금액(예: 다른 은행 연금저축). 귀속연도 · 공제 항목 · 이름 · 올해 누계.
+- **한 거래는 한 번만 센다**: 연결된 패턴 → 연결된 묶음 → (후보) 가계부 패턴 → 묶음 순으로 가져간다.
+  직접 입력은 거래가 아니라 그대로 더한다(`lib/tax/store.mjs` buildTracker).
 - 연결이 없고 1장 표의 패턴에 걸리는 묶음은 **후보**로 보여 준다. 후보 금액은 합계에 넣지 않는다.
 
 | 상태 | 뜻 | 합계에 넣나 |
 | --- | --- | --- |
 | **연결됨** | 사람이 공제 항목으로 연결했다 | 예 |
-| **후보** | 패턴에 걸렸지만 아직 연결하지 않았다. "연결 / 아님" 버튼 | 아니오 |
+| **후보** | 패턴에 걸렸지만 아직 연결하지 않았다. "연결 / 후보에서 제외" 버튼 | 아니오 |
 | **자격 확인 필요** | 연결됐지만 필요한 자격 체크(무주택 세대주 등)가 비어 있다. 금액은 보이고 효과는 계산하지 않는다 | 금액만 |
 | **추정** | 카드처럼 가계부에서 근사한 값 | 예(표시 붙음) |
 
@@ -135,6 +141,10 @@ tax_item_tags     (category, item) PK → deduction 'pension_savings' | 'irp' | 
 tax_card_confirmations (tax_year PK, through_month 'YYYY-MM', credit, debit, culture, market, transit,
                         updated_at)
                   ─ T3. 기준월까지 결제수단별 카드 사용액 누계(확인값). 건별 내역은 없다
+tax_pattern_tags  (basis, direction, pattern) PK → deduction | 'none', updated_at
+                  ─ 가계부 패턴과 같은 키. 금액은 저장하지 않는다
+tax_manual_entries (id, tax_year, deduction, label ≤40자, amount, updated_at)
+                  ─ 가계부 밖 공제 대상 금액(올해 누계)
 ```
 
 ---
