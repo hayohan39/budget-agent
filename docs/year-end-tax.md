@@ -128,11 +128,13 @@ IRP                         연결됨
 tax_year_settings (tax_year PK, annual_salary NULL, marginal_rate NULL, homeless_householder NULL,
                    mortgage_tier NULL, updated_at)
                   ─ 귀속연도마다 한 행. 비어 있는 칸은 "미입력" 으로 보여 준다
-                  ─ 카드 확인값(누계 · 기준월) 칸은 T3 에서 새 마이그레이션으로 더한다
 tax_item_tags     (category, item) PK → deduction 'pension_savings' | 'irp' | 'housing_subscription'
                    | 'rent' | 'lease_loan' | 'mortgage_interest' | 'insurance'
                    | 'donation_general' | 'donation_political' | 'donation_hometown' | 'none', updated_at
                   ─ 가계부 묶음을 공제 항목에 연결. 금액은 저장하지 않는다
+tax_card_confirmations (tax_year PK, through_month 'YYYY-MM', credit, debit, culture, market, transit,
+                        updated_at)
+                  ─ T3. 기준월까지 결제수단별 카드 사용액 누계(확인값). 건별 내역은 없다
 ```
 
 ---
@@ -156,7 +158,7 @@ tax_item_tags     (category, item) PK → deduction 'pension_savings' | 'irp' | 
 | **TG** | **가이드 탭**(`/tax/guide`): 가이드 문서를 앱에서 보여 준다. 정적 내용이라 T1 과 순서를 바꿔도 된다 | 없음 | 앱에서 가이드 읽기 |
 | **T1** | `lib/tax/` 공제 엔진(`deductions.mjs`): 규칙(`rules/2026.mjs`), 항목별 공제 대상 금액 · 합산 한도 · 효과 · 남은 한도, 카드 결제수단별 계산(가계부 추정치는 전부 신용카드). 한계세율은 입력. 순수 함수 + 테스트 | 없음 | (내부) |
 | **T2** | 트래커 화면(`/tax`) + `tax_year_settings` · `tax_item_tags` 마이그레이션: 연봉 · 한계세율 · 자격 입력, 자동 · 반자동 항목 집계, 후보 연결 / 아님 | 추가 | **공제 트래커 사용 가능** |
-| **T3** | 카드: 결제대금 기반 추정, 25% 문턱 진행률, 확인값 보정 | 없음(T2 테이블 사용) | 카드 문턱 추적 |
+| **T3** | 카드: 결제대금 기반 추정(결제월 −1 = 사용월, 카드사별), 25% 문턱 · 기본 한도 진행률, 확인값 보정(기준월까지 결제수단별 누계 — 그 뒤 달만 추정) | `tax_card_confirmations` 추가 | 카드 문턱 추적 |
 | T4 (선택) | 연말 예상(정기 납입은 최근 달 × 남은 달), 리포트 화면 요약 카드 | 없음 | 연말 기준 예상 |
 
 첫 대상 귀속연도는 **2026**(2027년 1월 정산분)이다.
@@ -170,7 +172,6 @@ tax_item_tags     (category, item) PK → deduction 'pension_savings' | 'irp' | 
 
 ## 7. 미결
 
-- **카드 보정 입력** — 기준월까지 누계 한 값(제안) vs 월별 입력.
 - **가이드의 ⚠️ 항목** — 국세청 「2026년 귀속 연말정산 신고안내」(2027년 1월)로 확인하고 지운다.
   T1 규칙 파일도 같은 자료로 확정한다.
 - **2025 귀속 소급** — 지원하지 않는다. 이미 끝난 정산이다.

@@ -6,8 +6,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  handleTaxCardPost,
   handleTaxSettingsPost,
   handleTaxTagPost,
+  parseCardRequest,
   parseSettingsRequest,
   parseTagRequest,
 } from '../lib/tax/http.mjs';
@@ -153,4 +155,48 @@ test('연결 저장 · 해제: 항목 이름을 되비추지 않는다. JSON 이
 
   const notJson = await handleTaxTagPost(request('/api/tax/tags', {}, { type: 'text/plain' }), deps());
   assert.equal(notJson.status, 400);
+});
+
+test('카드 확인값 요청: 기준월은 그 연도의 달, 금액은 0 이상 정수(빈칸 0), clear 는 연도만', () => {
+  assert.deepEqual(parseCardRequest({ year: 2026, action: 'set', throughMonth: '2026-09', credit: 9_000_000, debit: 1 }), {
+    ok: true,
+    value: {
+      year: 2026,
+      action: 'set',
+      confirmation: { throughMonth: '2026-09', credit: 9_000_000, debit: 1, culture: 0, market: 0, transit: 0 },
+    },
+  });
+  assert.deepEqual(parseCardRequest({ year: 2026, action: 'clear' }), { ok: true, value: { year: 2026, action: 'clear' } });
+  for (const bad of [
+    { year: 2026, action: 'set', throughMonth: '2025-12' },
+    { year: 2026, action: 'set', throughMonth: '2026-13' },
+    { year: 2026, action: 'set', throughMonth: '2026-9' },
+    { year: 2026, action: 'set', throughMonth: '2026-09', credit: -1 },
+    { year: 2026, action: 'set', throughMonth: '2026-09', debit: '100' },
+    { year: 2026, action: 'set', throughMonth: '2026-09', point: 1 },
+    { year: 2026, action: 'clear', throughMonth: '2026-09' },
+    { year: 2026, action: 'reset' },
+    { year: 2030, action: 'clear' },
+  ]) {
+    assert.equal(parseCardRequest(bad).ok, false, JSON.stringify(bad));
+  }
+});
+
+test('카드 확인값 저장 · 지우기: 가드 뒤에서만 DB, 금액을 되비추지 않는다', async () => {
+  const blocked = deps({ session: null });
+  assert.equal((await handleTaxCardPost(request('/api/tax/card', { year: 2026, action: 'clear' }), blocked)).status, 401);
+  assert.equal(blocked.queries.length, 0);
+
+  const d = deps();
+  const set = await handleTaxCardPost(
+    request('/api/tax/card', { year: 2026, action: 'set', throughMonth: '2026-09', credit: 9_876_543 }),
+    d,
+  );
+  assert.equal(set.status, 200);
+  assert.ok(!(await set.text()).includes('9876543'));
+  assert.deepEqual(d.queries[0].values, [2026, '2026-09', 9_876_543, 0, 0, 0, 0]);
+
+  const clear = await handleTaxCardPost(request('/api/tax/card', { year: 2026, action: 'clear' }), d);
+  assert.equal(clear.status, 200);
+  assert.match(d.queries[1].text, /^DELETE FROM tax_card_confirmations/);
 });
